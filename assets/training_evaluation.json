@@ -1,0 +1,50 @@
+{
+  "purpose": "외부 키오스크 화면의 클릭 가능 영역 탐지",
+  "dataset": "SeeOSK synthetic kiosk UI; random train/val/test split",
+  "dataset_sha256": "e941225b6320fb10feeca0c5974a8c30bd7079227b4e437a61fae69e905b99e8",
+  "initialization": "yolo26n.pt pretrained",
+  "weights": "/content/seeosk_v2_recheck_20260918_144929_153011/train/weights/best.pt",
+  "ultralytics": "8.4.153",
+  "torch": "2.11.0+cu128",
+  "gpu": "Tesla T4",
+  "imgsz": 640,
+  "target_epochs": 50,
+  "batch": 8,
+  "splits": {
+    "train": 800,
+    "val": 100,
+    "test": 100
+  },
+  "objects": {
+    "train": 12100,
+    "val": 1447,
+    "test": 1467
+  },
+  "test_metrics": {
+    "metrics/precision(B)": 0.9982268773436749,
+    "metrics/recall(B)": 0.9979550102249489,
+    "metrics/mAP50(B)": 0.9949931600547196,
+    "metrics/mAP50-95(B)": 0.9881909049745321,
+    "fitness": 0.9881909049745321
+  },
+  "test_speed_ms": {
+    "preprocess": 2.7557757700014918,
+    "inference": 11.310348060010256,
+    "loss": 0.0014043100100025185,
+    "postprocess": 4.17093849000139
+  },
+  "limitation": "합성 키오스크 UI의 무작위 분할 평가입니다. 실제 키오스크 및 미학습 화면 디자인에 대한 일반화 성능, 시선·끄덕임·음성 인식이나 하드웨어 동작을 입증하지 않습니다.",
+  "evidence": {
+    "prediction_images": [
+      "prediction_samples/screen_000012.jpg",
+      "prediction_samples/screen_000563.jpg",
+      "prediction_samples/screen_001000.jpg"
+    ],
+    "ground_truth_images": [
+      "ground_truth_samples/screen_000012_ground_truth.jpg",
+      "ground_truth_samples/screen_000563_ground_truth.jpg",
+      "ground_truth_samples/screen_001000_ground_truth.jpg"
+    ],
+    "visualization_confidence_threshold": 0.25
+  }
+}
