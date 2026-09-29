@@ -2,6 +2,11 @@
   const results=[];
   const wait=ms=>new Promise(r=>setTimeout(r,ms));
   const until=async(fn,timeout=20000)=>{const t=Date.now();while(!fn()){if(Date.now()-t>timeout)throw Error('Condition timed out: '+fn.toString());await wait(100);}};
+  // 같은 버튼을 목표로 확정할 때까지 프레임을 넣습니다.
+  const settleOn=async(event,key)=>{
+    for(let i=0;i<14;i++){receive(event);await wait(33);if(state.active?.key===key)return true;}
+    return state.active?.key===key;
+  };
   const check=(name,condition)=>{results.push({name,passed:!!condition});if(!condition)throw Error(name);};
   const realSend=send;
   try {
@@ -73,13 +78,14 @@
     check('remaining gaze does not repeatedly order',$('kiosk').contentWindow.total_list[0]===afterDwell&&!!state.blockedRect);
     state.blockedRect=null;state.firedKey=null;
     $('clickMode').value='mouth';
-    receive(trackEvent);await wait(50);
+    // 선택 판정은 같은 버튼을 180ms 이상 봐야 목표로 잡습니다. 한 프레임만 넣으면 불규칙해집니다.
+    await settleOn(trackEvent,target.key);
     const beforeMouth=$('kiosk').contentWindow.total_list[0];
     receive({type:'gesture_action',action:'left',gesture:'jawopen',x:trackEvent.x,y:trackEvent.y});
     await wait(250);
     check('mouth open selects the pointed menu',$('kiosk').contentWindow.total_list[0]===beforeMouth+1);
     state.regions=visibleDomRegions();renderRegions();
-    receive(trackEvent);await wait(50);
+    await settleOn(trackEvent,target.key);
     const beforePaused=$('kiosk').contentWindow.total_list[0];
     pause();receive({type:'gesture_action',action:'left',gesture:'jawopen'});await wait(150);
     check('mouth click is ignored while paused',$('kiosk').contentWindow.total_list[0]===beforePaused);
@@ -90,6 +96,13 @@
     // macOS 포인터 설정처럼 동작마다 표정을 따로 고릅니다.
     check('every action has its own expression selector',
       Object.keys(ACTION_LABELS).every(a=>!!$(`gesture-${a}`)));
+    check('gesture sensitivity starts at the easier default',$('gestureSense').value==='65');
+    $('gestureSense').value='85';$('gestureSense').oninput();
+    check('gesture sensitivity reaches the engine',
+      sent.some(m=>m.cmd==='gesture_sensitivity'&&Math.abs(m.value-0.85)<1e-6));
+    receive({type:'gesture_sensitivity',value:0.65,thresholds:{left:0.144}});
+    check('the engine can restore the sensitivity slider',
+      $('gestureSense').value==='65'&&$('gestureSenseValue').textContent==='65%');
     $('gesture-right').value='winkright';$('gesture-right').onchange();
     check('choosing an expression reaches the engine',
       sent.some(m=>m.cmd==='gestures'&&m.map.right==='winkright'));

@@ -98,14 +98,35 @@ class Detector:
 # macOS 포인터 설정처럼 동작마다 표정을 따로 지정합니다.
 ACTIONS = ('left', 'right', 'double', 'drag', 'pause', 'recenter')
 DEFAULT_GESTURES = {'left': 'jawopen'}
+# 표정을 얼마나 크게 지어야 하는지. 1에 가까울수록 작은 움직임에도 반응합니다.
+DEFAULT_GESTURE_SENSITIVITY = .65
 
 
-def make_detector(name):
-    """표정 이름으로 검출기를 만듭니다. 쓰지 않는 동작은 None."""
+def clamp_sensitivity(value, fallback=DEFAULT_GESTURE_SENSITIVITY):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if value != value or value in (float('inf'), float('-inf')):
+        return fallback
+    return max(0., min(1., value))
+
+
+def make_detector(name, sensitivity=DEFAULT_GESTURE_SENSITIVITY):
+    """표정 이름으로 검출기를 만듭니다. 쓰지 않는 동작은 None.
+
+    민감도는 기준선 위로 얼마나 올라와야 인정할지를 줄입니다. 기본 임계값은 입을 크게
+    벌려야 넘는 값이라, 조금만 벌려도 눌리게 하려면 이 여유를 줄여야 합니다.
+    """
+    sensitivity = clamp_sensitivity(sensitivity)
+    margin_scale = 1-.8*sensitivity      # 0.65에서 0.30 -> 0.144
+    noise_scale = 1-.6*sensitivity       # 잡음 기준(k_on*sd)도 함께 낮춥니다
     if name in BLEND_GESTURES:
-        return ThresholdDetector(name)
+        base = BLEND_GESTURES[name][1]
+        return ThresholdDetector(name, k_on=6.*noise_scale,
+                                 min_margin=max(.03, base*margin_scale))
     if name == 'nod':
-        return NodDetector()
+        return NodDetector(amp=max(.02, .055*noise_scale))
     return None
 
 
@@ -113,7 +134,9 @@ class Engine:
     def __init__(self):
         self.head_pointer = HeadPointer()
         self.gestures = dict(DEFAULT_GESTURES)
-        self.detectors = {a: make_detector(g) for a, g in self.gestures.items()}
+        self.gesture_sensitivity = DEFAULT_GESTURE_SENSITIVITY
+        self.detectors = {}
+        self.rebuild_detectors()
         self.blur_preview = True
         self.commands = queue.Queue()
         self.cap = None
@@ -134,6 +157,11 @@ class Engine:
         self.last_frame = time.monotonic()
         self.last_preview = 0
         self.failures = 0
+
+    def rebuild_detectors(self):
+        built = {a: make_detector(g, self.gesture_sensitivity) for a, g in self.gestures.items()}
+        self.detectors = {a: d for a, d in built.items() if d is not None}
+        self.gestures = {a: g for a, g in self.gestures.items() if a in self.detectors}
 
     def recalibrate_gestures(self):
         for detector in self.detectors.values():
@@ -202,10 +230,14 @@ class Engine:
             requested = c.get('map') or {}
             self.gestures = {a: requested[a] for a in ACTIONS
                              if requested.get(a) and requested[a] != 'none'}
-            self.detectors = {a: make_detector(g) for a, g in self.gestures.items()}
-            self.detectors = {a: d for a, d in self.detectors.items() if d is not None}
-            self.gestures = {a: g for a, g in self.gestures.items() if a in self.detectors}
+            self.rebuild_detectors()
             emit('gestures', map=self.gestures, available=list(BLEND_GESTURES)+['nod'])
+        elif cmd == 'gesture_sensitivity':
+            self.gesture_sensitivity = clamp_sensitivity(c.get('value'), self.gesture_sensitivity)
+            self.rebuild_detectors()
+            emit('gesture_sensitivity', value=self.gesture_sensitivity,
+                 thresholds={a: round(float(getattr(d, 'min_margin', getattr(d, 'amp', 0))), 3)
+                             for a, d in self.detectors.items()})
         elif cmd == 'blur_preview':
             self.blur_preview = bool(c.get('value', True))
             emit('blur_preview', value=self.blur_preview)

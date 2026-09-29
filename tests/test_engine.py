@@ -157,6 +157,43 @@ class HeadControlTests(unittest.TestCase):
             self.assertEqual(level['gesture'], 'jawopen')
             self.assertIn('state', level)
 
+    def test_higher_sensitivity_needs_a_smaller_expression(self):
+        low = worker.make_detector('jawopen', 0.)
+        default = worker.make_detector('jawopen')
+        high = worker.make_detector('jawopen', 1.)
+        self.assertGreater(low.min_margin, default.min_margin)
+        self.assertGreater(default.min_margin, high.min_margin)
+        # 기본값은 원래 임계값의 절반 아래여야 "조금만 벌려도" 눌립니다.
+        self.assertLess(default.min_margin, low.min_margin/2)
+        self.assertGreaterEqual(high.min_margin, .03)
+        self.assertLess(high.k_on, low.k_on)
+
+    def test_sensitivity_command_rebuilds_the_detectors(self):
+        with patch.object(worker,'Detector'), patch.object(worker,'emit') as emit:
+            e = worker.Engine()
+            before = e.detectors['left'].min_margin
+            e.handle({'cmd':'gesture_sensitivity','value':.0})
+            self.assertGreater(e.detectors['left'].min_margin, before)
+            self.assertAlmostEqual(emit.call_args.kwargs['value'], .0)
+            self.assertIn('left', emit.call_args.kwargs['thresholds'])
+
+    def test_a_broken_sensitivity_keeps_the_previous_one(self):
+        with patch.object(worker,'Detector'), patch.object(worker,'emit'):
+            e = worker.Engine()
+            e.handle({'cmd':'gesture_sensitivity','value':.2})
+            e.handle({'cmd':'gesture_sensitivity','value':'nope'})
+            self.assertAlmostEqual(e.gesture_sensitivity, .2)
+            e.handle({'cmd':'gesture_sensitivity','value':9})
+            self.assertAlmostEqual(e.gesture_sensitivity, 1.)
+
+    def test_a_smaller_opening_fires_at_the_default_sensitivity(self):
+        # 예전 임계값(0.32) 아래인 0.22 정도만 벌려도 눌려야 합니다.
+        clock, detector, emitter, extract, monotonic = self.mouth_context()
+        with detector, emitter as emit, extract, monotonic:
+            e = self.mouth_engine(clock)
+            self.run_mouth(e, .02, 90, emit)
+            self.assertGreaterEqual(self.run_mouth(e, .22, 10, emit), 1)
+
     def test_gesture_map_builds_one_detector_per_action(self):
         with patch.object(worker,'Detector'), patch.object(worker,'emit') as emit:
             e = worker.Engine()
