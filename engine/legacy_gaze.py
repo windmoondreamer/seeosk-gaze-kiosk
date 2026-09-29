@@ -71,6 +71,33 @@ def resolve_camera(spec):
     raise SystemExit("사용할 카메라를 찾지 못했습니다. --list 로 확인하고 --camera 로 지정하세요.")
 
 
+def show_no_camera_window(message, seconds=20):
+    """카메라가 없어도 프로그램이 떴다는 것을 보여 주는 안내 창.
+
+    카메라가 없는 PC에서 배포본을 눌러도 창 하나 없이 죽어 버리면 실행 여부를 확인할 수
+    없습니다. 여기서는 안내를 띄우고 Esc나 시간 경과로 닫습니다.
+    """
+    win = "SeeOSK"
+    canvas = np.full((360, 720, 3), 28, dtype=np.uint8)
+    lines = ["SeeOSK started, but no usable camera was found.", "", message, "",
+             "Connect a camera and run it again.", "Press Esc to close."]
+    for i, line in enumerate(lines):
+        cv2.putText(canvas, line, (40, 80+i*42), cv2.FONT_HERSHEY_SIMPLEX, .62, (235, 235, 235), 1, cv2.LINE_AA)
+    try:
+        cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
+        deadline = time.time()+seconds
+        while time.time() < deadline:
+            cv2.imshow(win, canvas)
+            if cv2.waitKey(50) & 0xFF == 27:
+                break
+            if cv2.getWindowProperty(win, cv2.WND_PROP_VISIBLE) < 1:
+                break
+    except cv2.error:
+        pass          # 화면 없는 환경에서는 안내 창을 건너뜁니다.
+    finally:
+        cv2.destroyAllWindows()
+
+
 def safe_name(text):
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in text)[:60]
 
@@ -699,11 +726,21 @@ def draw_text(img, text, org, size=20, color=(235, 235, 235)):
 def run(args):
     from pynput.mouse import Button, Controller
 
-    index, cam_name = resolve_camera(args.camera)
+    try:
+        index, cam_name = resolve_camera(args.camera)
+    except SystemExit as ex:
+        print(ex)
+        show_no_camera_window("No camera device was detected.")
+        return
     sw, sh = screen_size()
     print(f"카메라: [{index}] {cam_name}   화면: {int(sw)}x{int(sh)}   포인팅: {args.pointer}")
 
-    cam = Camera(index, args.width, args.height, flip=not args.no_flip)
+    try:
+        cam = Camera(index, args.width, args.height, flip=not args.no_flip)
+    except RuntimeError as ex:
+        print(ex)
+        show_no_camera_window(f"Camera {index} could not be opened.")
+        return
     tracker = FaceTracker()
     mouse = Controller()
 

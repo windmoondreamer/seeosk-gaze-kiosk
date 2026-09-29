@@ -111,6 +111,33 @@
     check('app scope restores window-sized head mapping',
       sent.filter(m=>m.cmd==='configure').pop().geometry.width===innerWidth);
     state.regions=visibleDomRegions();renderRegions();
+    // 버튼 인식범위: 보이는 사각형 밖이어도 겨냥한 버튼이 잡혀야 합니다.
+    const wide=state.regions.find(r=>r.element?.getAttribute('onclick')?.startsWith('option('));
+    // 어느 버튼에도 속하지 않으면서 wide 가 가장 가까운 지점을 찾습니다.
+    const outsideAll=(px,py)=>state.regions.every(r=>rectDistance(px,py,r)>0);
+    const nearestIs=(px,py,key)=>state.regions.slice().sort(
+      (a,b)=>rectDistance(px,py,a)-rectDistance(px,py,b))[0]?.key===key;
+    let justOutside=null;
+    for(const [dx,dy] of [[0,1],[0,-1],[-1,0],[1,0],[-1,-1],[1,-1],[-1,1],[1,1]]){
+      for(const gap of [10,16,24,34]){
+        const px=wide.x+wide.w/2+dx*(wide.w/2+gap), py=wide.y+wide.h/2+dy*(wide.h/2+gap);
+        if(outsideAll(px,py)&&nearestIs(px,py,wide.key)){justOutside={x:px,y:py};break;}
+      }
+      if(justOutside)break;
+    }
+    check('a near-miss point outside every button exists to test with',!!justOutside);
+    $('hitReach').value='0';$('hitReach').oninput();
+    check('reach off keeps the strict rectangle',
+      targetField.pick(justOutside.x,justOutside.y,performance.now(),state.regions)===null);
+    $('hitReach').value='64';$('hitReach').oninput();
+    check('reach picks up a near miss just outside the button',
+      targetField.pick(justOutside.x,justOutside.y,performance.now(),state.regions)?.key===wide.key);
+    check('reach label follows the slider',$('hitReachValue').textContent==='보통');
+    // 회귀 방지: 넓힌 영역이 선택을 가두면 안 됩니다.
+    const other=state.regions.find(r=>r.key!==wide.key&&r.element);
+    check('a pointer inside another button still wins over the held one',
+      targetField.pick(other.x+other.w/2,other.y+other.h/2,performance.now(),state.regions,wide.key)?.key===other.key);
+    $('hitReach').value='64';$('hitReach').oninput();
     $('clickMode').value='mouth';
     receive({type:'tracking',valid:false,reason:'얼굴 미검출'});
     await wait(450);

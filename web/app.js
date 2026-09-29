@@ -3,8 +3,10 @@ const $ = id => document.getElementById(id);
 const state = {ready:false,camera:false,headReady:false,paused:false,view:'kiosk',
   regions:[],active:null,lastGaze:0,sourceRequest:0,
   headValid:false,sampleIndex:0,dwellStart:0,dwellKey:null,firedKey:null,blockedRect:null,awaySince:0};
-const pointer=new GazePointer();
-const selection=new GazeSelection();
+// 포인터와 선택 판정이 같은 인식범위를 쓰도록 필드를 공유합니다.
+const targetField=new TargetField();
+const pointer=new GazePointer(targetField);
+const selection=new GazeSelection(targetField);
 let detectTimer, resizeTimer, toastTimer, snapshotRect;
 function send(cmd, args={}) {
   window.webkit?.messageHandlers?.seeosk?.postMessage({cmd,...args});
@@ -224,6 +226,12 @@ $('pointerScope').onchange=()=>{
   resetGaze();configure();invalidateRegions();
 };
 $('accessibilitySettings').onclick=()=>send('accessibility_settings');
+$('hitReach').oninput=()=>{
+  const reach=Number($('hitReach').value);
+  targetField.reach=reach;
+  $('hitReachValue').textContent=reach===0?'보이는 크기만':reach<=40?'조금':reach<=90?'보통':'넓게';
+  selection.reset();state.firedKey=null;
+};
 $('clickMode').onchange=()=>{
   selection.reset();state.dwellStart=performance.now();state.firedKey=null;
   $('mouthMeter').hidden=$('clickMode').value!=='mouth';
@@ -259,6 +267,7 @@ $('kiosk').srcdoc=KIOSK_HTML;
 controls();
 $('mouthMeter').hidden=$('clickMode').value!=='mouth';
 $('mouthState').hidden=$('clickMode').value!=='mouth';
+$('hitReach').oninput();
 send('ui_ready');
 
 $('switchMode').onclick=()=>{if(!switchBoard)openSwitchBoard();};
