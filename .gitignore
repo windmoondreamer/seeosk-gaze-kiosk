@@ -1,8 +1,11 @@
 .venv/
+.standalone-venv/
+.packaging-venv/
+SeeOSK.spec
+/배포/
 dist/
 build/
 __pycache__/
 *.py[cod]
 .DS_Store
-verification/app.png
-verification/native-smoke.json
+verification/

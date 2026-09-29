@@ -18,6 +18,7 @@ final class SeeOSKDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, W
     var quitting = false
     var smokeStarted = false
     let smoke = CommandLine.arguments.contains("--smoke-test")
+    let cameraCheck = CommandLine.arguments.contains("--camera-check")
     var smokeFolder: URL {
         if let i = CommandLine.arguments.firstIndex(of: "--output"), CommandLine.arguments.count > i+1 {
             return URL(fileURLWithPath: CommandLine.arguments[i+1], isDirectory: true)
@@ -27,7 +28,7 @@ final class SeeOSKDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, W
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        for directory in ["matplotlib","ultralytics"] {
+        for directory in ["matplotlib"] {
             try? FileManager.default.createDirectory(at:support.appendingPathComponent(directory),withIntermediateDirectories:true)
         }
         NSApp.setActivationPolicy(.regular)
@@ -47,7 +48,7 @@ final class SeeOSKDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, W
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x:0,y:0,width:1400,height:900)
         let size = NSSize(width:min(1320,screen.width-32),height:min(900,screen.height-32))
         window = NSWindow(contentRect:NSRect(origin:.zero,size:size),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
-        window.title = "SeeOSK · 시선 키오스크"
+        window.title = "SeeOSK · 고개로 주문"
         window.minSize = NSSize(width:980,height:700)
         window.contentView = web; window.delegate = self
         window.center(); window.makeKeyAndOrderFront(nil)
@@ -61,9 +62,28 @@ final class SeeOSKDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, W
                 self.finishSmoke(["passed":false,"error":"Native smoke test timed out"])
             }
         }
+        if cameraCheck {
+            let status=AVCaptureDevice.authorizationStatus(for:.video)
+            log("camera-check: authorizationStatus=\(status.rawValue) (3=authorized)")
+            DispatchQueue.main.asyncAfter(deadline:.now()+3) { [weak self] in
+                guard let self=self else {return}
+                self.startWorker()
+                DispatchQueue.main.asyncAfter(deadline:.now()+8) {
+                    self.log("camera-check: sending start")
+                    self.command(["cmd":"start","camera":-1])
+                    DispatchQueue.main.asyncAfter(deadline:.now()+20) {
+                        self.log("camera-check: done")
+                        NSApp.terminate(nil)
+                    }
+                }
+            }
+        }
     }
 
     func event(_ object: [String:Any]) {
+        if cameraCheck, let type=object["type"] as? String, type != "tracking" {
+            log("camera-check event: \(object)")
+        }
         guard uiReady, let data=try? JSONSerialization.data(withJSONObject:object),let text=String(data:data,encoding:.utf8) else{return}
         web.evaluateJavaScript("window.receive(\(text))") { _, error in
             if let error=error { self.log("UI event error: \(error)") }
@@ -77,19 +97,26 @@ final class SeeOSKDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, W
     func startWorker() {
         guard worker == nil else{return}
         do {
-            let data=try Data(contentsOf:resources.appendingPathComponent("runtime.json"))
-            let settings=try JSONSerialization.jsonObject(with:data) as! [String:String]
-            guard let python=settings["python"],FileManager.default.isExecutableFile(atPath:python) else {
-                event(["type":"error","message":"Python 실행 환경이 없습니다. 원래 seeosk_mac 폴더를 복원하고 앱을 다시 실행해 주세요."]);return
+            let process=Process()
+            let bundled=resources.appendingPathComponent("runtime/SeeOSKEngine")
+            if FileManager.default.isExecutableFile(atPath:bundled.path) {
+                process.executableURL=bundled
+                process.arguments=[]
+            } else {
+                let data=try Data(contentsOf:resources.appendingPathComponent("runtime.json"))
+                let settings=try JSONSerialization.jsonObject(with:data) as! [String:String]
+                guard let python=settings["python"],FileManager.default.isExecutableFile(atPath:python) else {
+                    event(["type":"error","message":"앱의 실행 엔진이 누락되었습니다. 배포 파일을 다시 받아 주세요."]);return
+                }
+                process.executableURL=URL(fileURLWithPath:python)
+                process.arguments=["-B","-u",resources.appendingPathComponent("engine/worker.py").path]
             }
-            let process=Process();process.executableURL=URL(fileURLWithPath:python)
-            process.arguments=["-B","-u",resources.appendingPathComponent("engine/worker.py").path]
             process.currentDirectoryURL=resources
             var env=ProcessInfo.processInfo.environment
+            env["SEE_OSK_RESOURCES"]=resources.path
             env["PYTHONUNBUFFERED"]="1";env["PYTHONNOUSERSITE"]="1"
             env["PYTHONDONTWRITEBYTECODE"]="1"
             env["MPLCONFIGDIR"]=support.appendingPathComponent("matplotlib").path
-            env["YOLO_CONFIG_DIR"]=support.appendingPathComponent("ultralytics").path
             process.environment=env
             let incoming=Pipe(),outgoing=Pipe()
             input=incoming.fileHandleForWriting;output=outgoing

@@ -9,7 +9,6 @@
 
 import argparse
 import json
-import subprocess
 import sys
 import time
 from collections import deque
@@ -20,40 +19,24 @@ import numpy as np
 import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
+from platform_io import (camera_devices, open_camera, screen_size as platform_screen_size,
+                         user_data_dir)
 
 ROOT = Path(__file__).resolve().parent
 MODEL_PATH = ROOT / "face_landmarker.task"
-PROFILE_DIR = ROOT / "profiles"
+PROFILE_DIR = user_data_dir() / "profiles"
 
 # ---------------------------------------------------------------- 카메라 탐색
 
 def avf_devices():
-    """AVFoundation 장치를 순서대로 읽는다. 카메라를 켜지 않으므로 아이폰이 깨어나지 않는다.
-
-    OpenCV의 AVFoundation 백엔드도 같은 순서의 인덱스를 쓴다.
-    """
-    try:
-        import AVFoundation as AV
-    except ImportError:
-        return []
-    names = ("AVCaptureDeviceTypeBuiltInWideAngleCamera", "AVCaptureDeviceTypeExternal",
-             "AVCaptureDeviceTypeContinuityCamera", "AVCaptureDeviceTypeDeskViewCamera")
-    types = [getattr(AV, n) for n in names if hasattr(AV, n)]
-    session = AV.AVCaptureDeviceDiscoverySession.discoverySessionWithDeviceTypes_mediaType_position_(
-        types, AV.AVMediaTypeVideo, AV.AVCaptureDevicePositionUnspecified)
-    out = []
-    for i, d in enumerate(session.devices()):
-        kind = str(d.deviceType()).replace("AVCaptureDeviceType", "")
-        out.append({"index": i, "name": str(d.localizedName()), "kind": kind,
-                    "builtin": kind == "BuiltInWideAngleCamera",
-                    "phone": kind in ("ContinuityCamera", "DeskViewCamera")})
-    return out
+    """Backward-compatible name for the platform-neutral camera list."""
+    return camera_devices(cv2)
 
 
 def list_cameras():
     devs = avf_devices()
     if not devs:
-        print("AVFoundation 장치 목록을 읽지 못했습니다.")
+        print("연결된 카메라를 찾지 못했습니다.")
         return
     for d in devs:
         tag = " (내장)" if d["builtin"] else (" (아이폰 연속성)" if d["phone"] else " (외장)")
@@ -82,6 +65,9 @@ def resolve_camera(spec):
     for d in devs:
         if not d["phone"]:
             return d["index"], d["name"]
+    if devs:
+        first = devs[0]
+        return first["index"], first["name"]
     raise SystemExit("사용할 카메라를 찾지 못했습니다. --list 로 확인하고 --camera 로 지정하세요.")
 
 
@@ -126,7 +112,7 @@ NOSE_TIP = 1
 L_IRIS, R_IRIS = 468, 473
 
 
-def extract_features(landmarks, w, h):
+def extract_features(landmarks, w, h, include_iris=True):
     """카메라에 무관한 비율 특징을 만든다.
 
     얼굴 좌우 눈초리를 잇는 축을 기준으로 삼아 고개 기울임(roll)을 상쇄하고,
@@ -152,7 +138,7 @@ def extract_features(landmarks, w, h):
     feats = {"head_x": head_x, "head_y": head_y, "face_w": face_w, "has_iris": False,
              "pos_x": float(eye_mid[0]) / w, "pos_y": float(eye_mid[1]) / h}
 
-    if len(landmarks) > R_IRIS:
+    if include_iris and len(landmarks) > R_IRIS:
         gx, gy = [], []
         for iris, outer, inner in ((L_IRIS, L_EYE_OUT, L_EYE_IN), (R_IRIS, R_EYE_OUT, R_EYE_IN)):
             c_out, c_in = px(outer), px(inner)
@@ -509,11 +495,7 @@ class FaceTracker:
 
 class Camera:
     def __init__(self, index, width=1920, height=1080, flip=True):
-        self.cap = cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION)
-        if not self.cap.isOpened():
-            raise SystemExit(f"카메라 {index}를 열지 못했습니다.")
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self.cap = open_camera(index, width, height, cv2_module=cv2)
         self.flip = flip
 
     def read(self):
@@ -529,9 +511,7 @@ class Camera:
 
 
 def screen_size():
-    from Quartz import CGDisplayBounds, CGMainDisplayID
-    b = CGDisplayBounds(CGMainDisplayID())
-    return float(b.size.width), float(b.size.height)
+    return platform_screen_size()
 
 
 # ---------------------------------------------------------------- 캘리브레이션
@@ -655,7 +635,7 @@ def run_calibration(cam, tracker, mode, sw, sh, settle=0.8, collect=1.0, fix_hea
 
 
 def profile_path(camera_name, mode, fix_head=False):
-    PROFILE_DIR.mkdir(exist_ok=True)
+    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
     suffix = "__fixedhead" if fix_head else ""
     return PROFILE_DIR / f"{safe_name(camera_name)}__{mode}{suffix}.json"
 
@@ -684,7 +664,9 @@ def save_profile(camera_name, mode, data, fix_head=False):
 
 _KO_FONT = None
 for _cand in ("/System/Library/Fonts/AppleSDGothicNeo.ttc",
-              "/System/Library/Fonts/Supplemental/AppleGothic.ttf"):
+              "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+              "C:/Windows/Fonts/malgun.ttf", "C:/Windows/Fonts/segoeui.ttf",
+              "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"):
     if Path(_cand).exists():
         _KO_FONT = _cand
         break
@@ -806,7 +788,7 @@ def run(args):
                         try:
                             mouse.position = (sx, sy)
                         except Exception as exc:
-                            print(f"커서 이동 실패({exc}). 손쉬운 사용 권한을 확인하세요.")
+                            print(f"커서 이동 실패({exc}). 운영체제의 마우스 제어 권한을 확인하세요.")
                             args.no_move = True
 
                 if not paused:

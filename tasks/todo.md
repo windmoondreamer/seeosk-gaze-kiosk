@@ -1,7 +1,19 @@
-# 업그레이드 작업
-- [x] 취소 시 해당 상품의 빨간 외곽선 제거, 남은 동일 상품 상태 보존
-- [x] 로컬 앱 F8 큰 카드 + 방향키 + 2단계 확정 기능 구현
-- [x] 카메라가 필요 없는 로컬 키보드 입력 경로 검증
-- [x] 신규 비공개 GitHub 저장소 생성 및 push
-- [ ] 친구 GitHub 계정 확인 후 초대 (사용자명 대기)
-- [ ] Pico 물리 버튼/CDC 실제 연결 (장치 미연결, 펌웨어 없음)
+# Standalone macOS + Windows checklist
+
+- [x] Add OS adapter for camera listing/opening and screen dimensions.
+- [x] Replace direct AVFoundation/Quartz references in shared Python paths.
+- [x] Add platform adapter tests with mocked camera/display APIs.
+- [x] Add standalone dependency pins and double-click launchers.
+- [x] Document macOS cursor permission, Windows camera permission, and Windows-host verification gap.
+- [x] Run Python tests, syntax checks, and macOS bundle build/signature verification.
+- [ ] Run Windows camera, DPI, cursor, and click smoke tests on a Windows host.
+
+# 배포 패키지 (2026-09-29)
+
+- [x] 낡은 macOS·통합·소스 ZIP 3개를 현재 앱 기준으로 재생성. Windows ZIP은 폴더와 해시 일치해 유지.
+- [x] 번들에서 torch·ultralytics·jax·polars·scipy 제외 (2.0GB → 529MB).
+- [x] 클릭 영역 탐지를 onnxruntime으로 옮기고 torch 경로와 800장 대조.
+- [x] `packaging/build_windows.py` launcher 튜플 버그 수정.
+- [x] `release-notes.md`·`실행안내.txt`를 현재 앱 동작에 맞게 갱신.
+- [ ] 배포/macOS의 SeeOSK.previous-20260929-105449.app(87MB) 삭제 — 권한 거부로 미수행.
+- [ ] 변경 사항 git 커밋.

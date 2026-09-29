@@ -1,13 +1,11 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const state = {ready:false,camera:false,calibrated:false,paused:false,calibrating:false,view:'kiosk',
-  regions:[],active:null,lastGaze:0,sourceRequest:0,calGeneration:0,phase:'calibrate',point:0,
-  pendingCalibration:false,headValid:false,sampleIndex:0,dwellStart:0,dwellKey:null,firedKey:null,blockedRect:null,awaySince:0};
+const state = {ready:false,camera:false,headReady:false,paused:false,view:'kiosk',
+  regions:[],active:null,lastGaze:0,sourceRequest:0,
+  headValid:false,sampleIndex:0,dwellStart:0,dwellKey:null,firedKey:null,blockedRect:null,awaySince:0};
 const pointer=new GazePointer();
 const selection=new GazeSelection();
-const CAL = [.12,.5,.88].flatMap(y=>[.10,.5,.90].map(x=>[x,y]));
-const CHECK = [[.23,.23],[.77,.76],[.23,.76]];
-let calTimer, detectTimer, resizeTimer, toastTimer, snapshotRect;
+let detectTimer, resizeTimer, toastTimer, snapshotRect;
 function send(cmd, args={}) {
   window.webkit?.messageHandlers?.seeosk?.postMessage({cmd,...args});
 }
@@ -19,61 +17,26 @@ function resetGaze(){
   pointer.reset();selection.reset();
   $('gaze').hidden=true; state.active=null;state.lastGaze=0;state.dwellStart=0;state.dwellKey=null;state.firedKey=null;
   document.querySelectorAll('.region.active').forEach(e=>e.classList.remove('active'));
-  $('selection').textContent='바라보는 메뉴가 여기에 표시됩니다.';
+  $('selection').textContent='선택할 메뉴 위에 포인터를 멈춰 주세요.';
 }
 function controls(){
   $('cameraToggle').textContent=state.camera?'카메라 끄기':'카메라 켜기';
-  $('camera').disabled=state.camera||state.calibrating;
-  $('pause').disabled=!state.camera||state.calibrating;
+  $('camera').disabled=state.camera;
+  $('pause').disabled=!state.camera;
   $('pause').textContent=state.paused?'추적 다시 시작':'일시정지';
-  $('calibrate').disabled=!state.ready||state.calibrating;
-  $('cameraToggle').disabled=!state.ready||state.calibrating;
-  if(state.calibrating)badge('캘리브레이션 중');
-  else if(state.paused)badge('일시정지');
-  else if(state.camera&&state.calibrated)badge('시선 추적 중',true);
-  else if(state.camera)badge('캘리브레이션 필요');
+  $('recenter').disabled=!state.ready;
+  $('cameraToggle').disabled=!state.ready;
+  if(state.paused)badge('일시정지');
+  else if(state.camera&&state.headReady)badge('고개 조작 중',true);
+  else if(state.camera)badge('중앙 맞추는 중');
   else badge(state.ready?'카메라 대기':'엔진 연결 중');
 }
-function pause(){if(!state.camera||state.calibrating)return;state.paused=!state.paused;resetGaze();controls();}
-function beginCalibration(){
-  $('result').hidden=true;
-  if(!state.ready){toast('시선 추적 엔진을 준비 중입니다. 잠시 후 다시 눌러 주세요.');return;}
-  if(!state.camera){state.pendingCalibration=true;startCamera();return;}
-  state.calibrating=true;state.paused=false;state.calGeneration++;state.phase='calibrate';state.point=0;
-  resetGaze();$('calibration').hidden=false;$('target').hidden=true;controls();
-  send('calibrate',{generation:state.calGeneration});
-}
-function showPoint(){
-  clearTimeout(calTimer);
-  const points=state.phase==='check'?CHECK:CAL;
-  const [x,y]=points[state.point];
-  $('target').hidden=false;$('target').style.left=`${x*100}%`;$('target').style.top=`${y*100}%`;
-  $('calTitle').textContent=state.phase==='check'?'보정 결과 확인하기':'시선 위치 맞추기';
-  $('calProgress').textContent=`${state.phase==='check'?'확인':'보정'} ${state.point+1} / ${points.length}`;
-  $('calInstruction').textContent='머리는 그대로, 눈동자만 점을 따라 움직여 주세요.';
-  $('pointProgress').value=0;
-  const generation=state.calGeneration;
-  calTimer=setTimeout(()=>{if(state.calibrating&&generation===state.calGeneration)send('collect',{generation,index:state.point,phase:state.phase});},450);
-}
-function cancelCalibration(){
-  clearTimeout(calTimer);state.pendingCalibration=false;
-  if(state.calibrating)send('cancel');
-  state.calibrating=false;$('calibration').hidden=true;resetGaze();controls();
-}
-function metrics(m){
-  $('meanError').textContent=Math.round(m.mean_px);$('p95Error').textContent=Math.round(m.p95_px);
-  $('calBadge').textContent=m.passed?'보정됨':'재보정 필요';
-  $('calHint').textContent=m.passed?'별도 3점에서 확인한 오차입니다. 머리·카메라·창 위치가 바뀌면 다시 보정해 주세요.':'마우스 이동 중 · 오차가 큽니다. 조명과 자세를 맞춘 뒤 다시 보정해 주세요.';
-}
-function calibrationResult(m){
-  clearTimeout(calTimer);state.calibrating=false;state.calibrated=!!(m.passed||m.pointer_usable);$('calibration').hidden=true;
-  metrics(m);resetGaze();controls();
-  $('resultTitle').textContent=m.passed?'시선 위치를 맞췄습니다':'한 번 더 맞춰 주세요';
-  $('resultText').textContent=`확인용 3점에서 평균 ${Math.round(m.mean_px)}px\n95% 오차 ${Math.round(m.p95_px)}px\n\n${m.passed?'키오스크에서 파란 점이 시선을 따라가는지 확인해 주세요.':'머리를 고정하고 점을 끝까지 바라봐 주세요. 카메라를 눈높이에 두면 도움이 됩니다.'}`;
-  $('result').hidden=true;
-
-  toast(m.passed?'보정 완료 · 실제 마우스가 시선을 따라갑니다. Esc로 일시정지합니다.':'시선 마우스를 시작합니다. 보정 오차가 커서 재보정을 권장합니다.');
-  invalidateRegions();
+function pause(){if(!state.camera)return;state.paused=!state.paused;resetGaze();controls();}
+function recenter(){
+  if(!state.ready)return;
+  state.headReady=false;state.paused=false;resetGaze();
+  if(!state.camera)startCamera();else send('recenter');
+  controls();
 }
 function startCamera(){
   $('trackingHint').textContent='카메라를 시작하고 있습니다…';
@@ -112,7 +75,6 @@ function invalidateRegions(){
   clearTimeout(detectTimer);detectTimer=setTimeout(updateRegions,220);
 }
 function updateRegions(){
-  if(state.calibrating||!$('result').hidden)return;
   if(state.view==='kiosk'&&$('regionMode').value==='dom'){
     state.regions=visibleDomRegions();renderRegions();return;
   }
@@ -128,7 +90,7 @@ function updateRegions(){
   }
 }
 function selectTarget(fromDwell=false){
-  if(!state.active||!state.headValid||state.paused||state.calibrating||!$('result').hidden||performance.now()-state.lastGaze>300)return;
+  if(!state.active||!state.headValid||state.paused||performance.now()-state.lastGaze>300)return;
   const r=state.active;
   if(fromDwell){state.blockedRect={x:r.x,y:r.y,w:r.w,h:r.h};state.awaySince=0;}
   if(state.view==='sample'){toast(`선택 영역: ${r.label} · 학습 이미지는 화면이 전환되지 않습니다.`);return;}
@@ -140,25 +102,32 @@ function selectTarget(fromDwell=false){
 }
 function track(m){
   if(m.preview){$('preview').src=`data:image/jpeg;base64,${m.preview}`;$('preview').hidden=false;$('previewPlaceholder').hidden=true;}
-  $('fps').textContent=`${m.fps||'—'} FPS`;$('faceBadge').textContent=m.valid?'눈동자 감지됨':'위치 확인 필요';
+  $('fps').textContent=`${m.fps||'—'} FPS`;$('faceBadge').textContent=m.valid?'얼굴 감지됨':'위치 확인 필요';
   $('trackingHint').textContent=m.reason;state.headValid=m.valid;
-  if(!m.valid&&state.calibrated&&!state.paused&&!state.calibrating){
+  if(m.mouth!==undefined){
+    $('mouthFill').style.width=`${Math.min(100,Math.round(m.mouth*100))}%`;
+    $('mouthState').textContent=`입벌림 ${m.mouth_state||''}`.trim();
+  }
+  if(!m.valid&&state.headReady&&!state.paused){
     selection.update(NaN,NaN,performance.now(),state.regions);
     $('gaze').hidden=true;return;
   }
-  if(!m.valid||!state.calibrated||state.paused||state.calibrating||!$('result').hidden||m.x===undefined){resetGaze();return;}
+  if(!m.valid||!state.headReady||state.paused||m.x===undefined){resetGaze();return;}
   const now=performance.now();state.lastGaze=now;
   const stabilized=pointer.update(m.x,m.y,now,state.regions);
   send('move_cursor',{x:stabilized.x,y:stabilized.y});
   $('gaze').hidden=false;$('gaze').style.left=`${stabilized.x}px`;$('gaze').style.top=`${stabilized.y}px`;
-  const choice=selection.update(m.x,m.y,now,state.regions);
+  // Use the same stabilized coordinates for cursor and menu hit testing.
+  // Previously raw frame coordinates drove selection, so the cursor could
+  // visibly sit on a button while the hit test flickered outside it.
+  const choice=selection.update(stabilized.x,stabilized.y,now,state.regions);
   const active=choice.target;
   if(state.active?.key!==active?.key){
     state.active?.node?.classList.remove('active');active?.node?.classList.add('active');
     state.dwellStart=now;state.dwellKey=active?.key;state.firedKey=null;
   }
   state.active=active;
-  $('selection').textContent=active?active.label:'선택 영역 밖을 바라보고 있습니다.';
+  $('selection').textContent=active?active.label:'고개를 움직여 메뉴를 가리켜 주세요.';
   if(state.blockedRect){
     const b=state.blockedRect;
     const inside=m.x>=b.x&&m.x<=b.x+b.w&&m.y>=b.y&&m.y<=b.y+b.h;
@@ -166,7 +135,7 @@ function track(m){
     else if(!state.awaySince)state.awaySince=now;
     else if(now-state.awaySince>=300){state.blockedRect=null;state.dwellStart=now;}
   }
-  if(active&&$('dwell').checked&&state.firedKey!==active.key&&!state.blockedRect){
+  if(active&&$('clickMode').value==='dwell'&&state.firedKey!==active.key&&!state.blockedRect){
     const elapsed=choice.elapsed;
     $('selection').textContent=`${active.label} · ${Math.min(100,Math.round(elapsed/9))}%`;
     if(choice.inside&&elapsed>=900){state.firedKey=active.key;selectTarget(true);}
@@ -187,7 +156,7 @@ function loadSample(index){
 }
 window.receive=m=>{
   switch(m.type){
-    case 'ready':state.ready=true;configure();controls();if(state.view==='sample'||$('regionMode').value==='yolo')updateRegions();break;
+    case 'ready':state.ready=true;configure();send('sensitivity',{value:Number($('sensitivity').value)/100});controls();if(state.view==='sample'||$('regionMode').value==='yolo')updateRegions();break;
     case 'cameras':{
       $('camera').replaceChildren();
       for(const d of m.devices){const o=new Option(d.name,String(d.index));$('camera').add(o);}
@@ -196,28 +165,21 @@ window.receive=m=>{
       if(preferred)$('camera').value=String(preferred.index);break;
     }
     case 'started':state.camera=true;state.paused=false;controls();$('permissions').hidden=true;
-      if(state.pendingCalibration){state.pendingCalibration=false;beginCalibration();}break;
-    case 'stopped':state.camera=false;state.calibrated=false;state.pendingCalibration=false;cancelCalibration();
+      break;
+    case 'stopped':state.camera=false;state.headReady=false;resetGaze();$('calBadge').textContent='자동 중앙 맞춤';
       $('preview').hidden=true;$('preview').removeAttribute('src');$('previewPlaceholder').hidden=false;$('faceBadge').textContent='카메라 꺼짐';$('fps').textContent='— FPS';controls();break;
-    case 'profile':state.calibrated=true;metrics(m.validation);controls();break;
+    case 'head_ready':state.headReady=true;$('calBadge').textContent='준비 완료';controls();break;
+    case 'centering':state.headReady=false;resetGaze();controls();break;
     case 'tracking':track(m);break;
-    case 'calibration_started':if(m.generation===state.calGeneration&&state.calibrating)showPoint();break;
-    case 'calibration_progress':if(state.calibrating){$('pointProgress').value=m.progress;$('calInstruction').textContent=m.hint;}break;
-    case 'sample_retry':if(m.generation===state.calGeneration&&state.calibrating){toast(m.message);showPoint();}break;
-    case 'sample_done':
-      if(!state.calibrating||m.generation!==state.calGeneration)return;
-      state.point++;
-      if(state.phase==='calibrate'&&state.point===CAL.length){state.phase='check';state.point=0;}
-      showPoint();break;
-    case 'calibration_result':if(m.generation===state.calGeneration&&state.calibrating)calibrationResult(m.validation);break;
-    case 'calibration_failed':cancelCalibration();state.calibrated=false;controls();toast(m.message);break;
-    case 'calibration_invalid':
-      state.calibrated=false;state.calibrating=false;clearTimeout(calTimer);$('calibration').hidden=true;
-      $('calBadge').textContent='보정 필요';$('meanError').textContent='—';$('p95Error').textContent='—';
-      $('calHint').textContent=m.message;resetGaze();controls();break;
-    case 'cancelled':state.calibrated=m.calibrated;controls();break;
+    // 입벌림 클릭은 dwell과 같은 반복 잠금을 쓰지 않습니다. 입을 다물었다 다시 벌려야 다음 선택이 됩니다.
+    case 'gesture_click':
+      if($('clickMode').value!=='mouth'||state.paused||!state.headReady)break;
+      selectTarget();break;
+    case 'sensitivity':
+      $('sensitivity').value=String(Math.round(m.value*100));
+      $('sensitivityValue').textContent=`${Math.round(m.value*100)}%`;break;
     case 'window_changed':
-      if(state.calibrating)cancelCalibration();configure();invalidateRegions();break;
+      configure();invalidateRegions();break;
     case 'focus':if(!m.active&&state.camera){state.paused=true;resetGaze();controls();}break;
     case 'regions':
       if(m.request!==state.sourceRequest)return;
@@ -228,19 +190,27 @@ window.receive=m=>{
       break;
     case 'capture_done':document.body.classList.remove('capturing');break;
     case 'detector_error':if(m.request!==state.sourceRequest)return;$('regionCount').textContent='영역 탐지 실패';toast(m.message);break;
-    case 'permission_denied':state.pendingCalibration=false;$('permissions').hidden=false;toast(m.message);break;
-    case 'engine_exit':state.ready=false;state.camera=false;state.calibrated=false;cancelCalibration();controls();toast('추적 엔진이 종료되었습니다. 앱을 다시 실행해 주세요.');break;
-    case 'error':state.pendingCalibration=false;toast(m.message);$('trackingHint').textContent=m.message;break;
+    case 'permission_denied':$('permissions').hidden=false;toast(m.message);break;
+    case 'engine_exit':state.ready=false;state.camera=false;state.headReady=false;resetGaze();controls();toast('추적 엔진이 종료되었습니다. 앱을 다시 실행해 주세요.');break;
+    case 'error':toast(m.message);$('trackingHint').textContent=m.message;break;
   }
 };
 $('cameraToggle').onclick=()=>state.camera?send('stop'):startCamera();
-$('calibrate').onclick=beginCalibration;$('pause').onclick=pause;$('cancelCal').onclick=cancelCalibration;
-$('retryCal').onclick=beginCalibration;$('closeResult').onclick=()=>{$('result').hidden=true;invalidateRegions();};
+$('recenter').onclick=recenter;$('pause').onclick=pause;
 $('permissions').onclick=()=>send('permissions');$('fullscreen').onclick=()=>send('fullscreen');
 $('kioskTab').onclick=()=>switchView('kiosk');$('sampleTab').onclick=()=>switchView('sample');
 $('resetKiosk').onclick=()=>{$('kiosk').srcdoc=KIOSK_HTML;invalidateRegions();};
 $('regionMode').onchange=invalidateRegions;$('showRegions').onchange=()=>{$('regionLayer').hidden=!$('showRegions').checked;};
-$('dwell').onchange=()=>{selection.reset();state.dwellStart=performance.now();state.firedKey=null;};
+$('clickMode').onchange=()=>{
+  selection.reset();state.dwellStart=performance.now();state.firedKey=null;
+  $('mouthMeter').hidden=$('clickMode').value!=='mouth';
+  $('mouthState').hidden=$('clickMode').value!=='mouth';
+};
+$('sensitivity').oninput=()=>{
+  const percent=Number($('sensitivity').value);
+  $('sensitivityValue').textContent=`${percent}%`;
+  send('sensitivity',{value:percent/100});
+};
 $('prevSample').onclick=()=>loadSample(state.sampleIndex-1);$('nextSample').onclick=()=>loadSample(state.sampleIndex+1);
 $('sampleList').onchange=()=>loadSample(Number($('sampleList').value));$('sample').onload=invalidateRegions;
 SAMPLE_FILES.forEach((f,i)=>$('sampleList').add(new Option(`${i+1} / ${SAMPLE_FILES.length} · ${f}`,String(i))));
@@ -256,13 +226,16 @@ $('kiosk').onload=()=>{
 };
 function keyHandler(e){
   if(switchKeys(e))return;
-  if(e.key==='Escape'){e.preventDefault();if(state.calibrating)cancelCalibration();else if(!$('result').hidden)$('result').hidden=true;else pause();}
+  if(e.key==='Escape'){e.preventDefault();pause();}
   if(e.code==='Space'&&!['INPUT','SELECT','BUTTON'].includes(e.target.tagName)){e.preventDefault();selectTarget();}
 }
 document.addEventListener('keydown',keyHandler);
-window.addEventListener('resize',()=>{resetGaze();clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{if(state.calibrating)cancelCalibration();configure();invalidateRegions();},250);});
+window.addEventListener('resize',()=>{resetGaze();clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{configure();invalidateRegions();},250);});
 setInterval(()=>{if(state.lastGaze&&performance.now()-state.lastGaze>350)resetGaze();},100);
 $('kiosk').srcdoc=KIOSK_HTML;
-controls();send('ui_ready');
+controls();
+$('mouthMeter').hidden=$('clickMode').value!=='mouth';
+$('mouthState').hidden=$('clickMode').value!=='mouth';
+send('ui_ready');
 
 $('switchMode').onclick=()=>{if(!switchBoard)openSwitchBoard();};

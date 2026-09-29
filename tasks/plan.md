@@ -1,16 +1,22 @@
-# 업그레이드 계획: SeeOSK 취소·선택·공유
+# Standalone SeeOSK for macOS and Windows
 
-## 범위
-사용자 요청에 따라 취소 뒤 빨간 메뉴 강조를 해제하고, 버튼 선택 경로를 문서화하며, 소스를 신규 비공개 GitHub 저장소에 게시한다. 외부 친구 초대는 정확한 GitHub 계정이 필요하다.
+## Overview
+Provide a double-clickable standalone launcher for the existing OpenCV gaze/head pointer, with shared calibration and tracking logic and explicit OS adapters. The macOS Accessibility Head Pointer settings route remains an optional macOS-only path in the native SeeOSK app; the standalone tracker uses its own MediaPipe estimate and cursor driver.
 
-## 순서와 완료 조건
-1. 메뉴/주문 취소 상태 정리: 취소된 상품의 빨간 테두리를 해제하고 다른 동일 상품이 남았으면 강조 유지. 홈/결제 취소 때 강조를 정리.
-2. 선택 경로: 이미 구현된 F8 큰 카드 선택을 검토하고 전환 키·취소 키·카메라 비의존 조건을 문서화.
-3. 저장소 준비: 앱 번들, 가상환경, 캐시, 개인별 런타임 경로를 제외하고 소스·샘플·모델을 포함하는 비공개 저장소 생성.
-4. 게시: 현재 수정사항을 커밋하고 origin에 push. URL을 전달.
-5. 친구 초대: 사용자명/이메일을 받은 후 협업자로 초대.
+## Architecture decisions
+- Reuse `engine/legacy_gaze.py` as the standalone desktop flow: it already owns calibration, gaze/head models, OpenCV preview, and pointer gestures.
+- Move camera enumeration/opening and display-size queries into an OS adapter. Keep MediaPipe feature extraction and mapping platform-neutral.
+- Use pynput for OS cursor movement in the standalone flow (macOS Accessibility permission required; Windows uses its native input backend).
+- Keep the existing Swift/WebKit app macOS-only; do not claim it runs on Windows. The standalone launchers run the shared Python program on both platforms.
+- Pin a minimal standalone dependency set without the kiosk detector; let pynput select its native OS backend.
 
-## 위험과 제한
-- 일반 매장 키오스크에서 USB만으로 실행되는지 검증되지 않음. 이 프로젝트는 키오스크 PC 호스트 앱 구조.
-- 친구 식별자가 없으면 초대 단계만 미완료.
-- 모델/샘플 이미지 배포 권리는 GitHub 공개 전 점검 필요. 기본 저장소는 비공개.
+## Tasks
+1. Add a shared platform adapter for macOS/Windows camera enumeration, camera opening, and screen geometry; cover behavior with mocked tests.
+2. Route the existing worker and standalone gaze runner through that adapter; retain the macOS built-in-camera preference.
+3. Add double-click launch/install entry points and a minimal cross-platform requirements file; explain permissions and platform scope.
+4. Run the Python suite, syntax checks, and a build/package smoke check available on this Mac.
+
+## Risks and limits
+- Windows cannot be run on this Mac; Windows camera permissions, DPI scaling, pynput cursor movement, and packaging need a Windows-host smoke test.
+- MediaPipe 0.10.21 needs a supported Python release; launchers will require Python 3.12.
+- The legacy OpenCV UI is a standalone window, not the full SeeOSK kiosk-analysis dashboard.

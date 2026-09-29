@@ -1,7 +1,6 @@
 // Optional keyboard/HID-keyboard pathway. Does not claim CDC/Pico integration.
 let switchBoard=null;
 function openSwitchBoard(){
-  if(state.calibrating){toast('보정을 마치거나 취소한 뒤 열어 주세요.');return;}
   if(state.view!=='kiosk'){toast('메가커피 연습 화면에서 사용할 수 있습니다.');return;}
   state.paused=true;resetGaze();controls();
   const items=visibleDomRegions().map(r=>({...r,label:r.element.getAttribute('aria-label')||r.label}));
@@ -13,7 +12,7 @@ function closeSwitchBoard(){if(!switchBoard)return;switchBoard.panel.remove();sw
 function renderSwitchBoard(){
   const b=switchBoard;if(!b)return;b.panel.replaceChildren();
   const title=document.createElement('h2');title.textContent=b.confirm?'이 항목을 실행할까요?':'버튼으로 선택';b.panel.append(title);
-  const hint=document.createElement('p');hint.textContent='← → 이전·다음 / Enter 또는 Space 선택 / Esc 취소 · 시선 이동은 일시정지됩니다.';b.panel.append(hint);
+  const hint=document.createElement('p');hint.textContent='← → 이전·다음 / Enter 또는 Space 선택 / Esc 취소 · 고개 조작은 일시정지됩니다.';b.panel.append(hint);
   const grid=document.createElement('div');grid.className='switch-grid';b.panel.append(grid);
   const entries=b.confirm?[{label:'실행: '+b.items[b.index].label,action:()=>executeSwitchItem()},{label:'돌아가기',action:()=>{b.confirm=false;renderSwitchBoard();}}]:b.items.slice(Math.floor(b.index/4)*4,Math.floor(b.index/4)*4+4).map((r,j)=>({label:r.label,action:()=>{b.index=Math.floor(b.index/4)*4+j;b.confirm=true;renderSwitchBoard();}}));
   entries.forEach((entry,j)=>{const button=document.createElement('button');button.textContent=entry.label;button.onclick=entry.action;button.className=(b.confirm?j===0:j===b.index%4)?'switch-current':'';grid.append(button);});

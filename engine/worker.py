@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Local JSON-lines worker. Camera frames never leave the process except preview."""
+import os
 import base64
 import hashlib
 import json
@@ -20,14 +21,17 @@ if __name__ == '__main__':
 import cv2
 import numpy as np
 from core import (CAL_POINTS, CHECK_POINTS, fit, predict, validate, head_vector,
-                  head_ok, stable_median, save_profile, load_profile)
-from legacy_gaze import FaceTracker, extract_features, OneEuro
+                  head_ok, stable_summary, save_profile, load_profile,
+                  fit_gaze_zones, classify_gaze_zone)
+from legacy_gaze import FaceTracker, extract_features, OneEuro, ThresholdDetector
+from head_pointer import HeadPointer
+from platform_io import camera_devices, open_camera, user_data_dir
 if __name__ == '__main__':
     faulthandler.cancel_dump_traceback_later()
     print('Camera libraries loaded.', flush=True)
 
-ROOT = Path(__file__).resolve().parent.parent
-DATA = Path.home() / 'Library/Application Support/SeeOSK'
+ROOT = Path(os.environ.get("SEE_OSK_RESOURCES", Path(__file__).resolve().parent.parent))
+DATA = user_data_dir()
 DATA.mkdir(parents=True, exist_ok=True)
 OUTPUT_LOCK = threading.Lock()
 
@@ -42,15 +46,9 @@ def emit(kind, **data):
 
 
 def devices():
-    import AVFoundation as AV
-    # OpenCV's AVFoundation backend uses this same ordered device list.
-    out = []
-    for i, d in enumerate(AV.AVCaptureDevice.devicesWithMediaType_(AV.AVMediaTypeVideo)):
-        kind = str(d.deviceType())
-        out.append(dict(index=i, name=str(d.localizedName()), id=str(d.uniqueID()),
-                        phone=('Continuity' in kind or 'DeskView' in kind),
-                        builtin='BuiltIn' in kind))
-    return out
+    return [dict(index=d['index'], name=d['name'], id=d['id'],
+                 phone=d.get('phone', False), builtin=d.get('builtin', False))
+            for d in camera_devices(cv2)]
 
 
 class Detector:
@@ -72,23 +70,19 @@ class Detector:
             job = self.jobs.get()
             try:
                 if model is None:
-                    import torch
-                    torch.set_num_threads(2)
-                    from ultralytics import YOLO
-                    model = YOLO(str(ROOT/'assets/best.pt'))
+                    from onnx_detector import OnnxDetector
+                    model = OnnxDetector(ROOT/'assets/best.onnx')
                 frame = cv2.imread(job['path'])
                 if frame is None:
                     raise ValueError('화면 이미지를 읽지 못했습니다.')
                 h, w = frame.shape[:2]
                 t = time.monotonic()
-                result = model.predict(frame, imgsz=640, conf=.35, device='cpu', verbose=False)[0]
                 regions = []
-                for box in result.boxes:
-                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                for x1, y1, x2, y2, confidence, cls in model.detect(frame, conf=.35):
                     if x2-x1 < 8 or y2-y1 < 8:
                         continue
                     regions.append(dict(x=x1/w, y=y1/h, w=(x2-x1)/w, h=(y2-y1)/h,
-                                        confidence=float(box.conf[0]), label=result.names[int(box.cls[0])]))
+                                        confidence=confidence, label=model.names[cls]))
                 emit('regions', request=job.get('request'), regions=regions,
                      inference_ms=round((time.monotonic()-t)*1000), source_size=[w, h])
             except Exception as ex:
@@ -101,6 +95,8 @@ class Detector:
 
 class Engine:
     def __init__(self):
+        self.head_pointer = HeadPointer()
+        self.mouth = ThresholdDetector('jawopen')
         self.commands = queue.Queue()
         self.cap = None
         self.tracker = None
@@ -110,7 +106,7 @@ class Engine:
         self.backup = None
         self.candidate = None
         self.calibration = False
-        self.samples, self.targets, self.checks, self.check_targets = [], [], [], []
+        self.samples, self.targets, self.spreads, self.checks, self.check_targets = [], [], [], [], []
         self.reference = None
         self.collection = None
         self.generation = 0
@@ -138,6 +134,7 @@ class Engine:
         self.collection = None
         self.calibration = False
         self.profile = None
+        self.head_pointer.reset()
         self.reset_filters()
 
     def handle(self, c):
@@ -148,15 +145,12 @@ class Engine:
             geometry = c['geometry']
             if geometry != self.geometry:
                 self.geometry = geometry
-                self.profile = None
                 self.collection = None
-                self.calibration = False
+                if self.calibration:
+                    self.calibration = False
+                    self.profile = self.backup
+                    self.backup = None
                 self.reset_filters()
-                emit('calibration_invalid', message='창 위치·크기에 맞춰 캘리브레이션해 주세요.')
-                if self.camera:
-                    self.profile = load_profile(self.profile_path(), self.camera['id'], geometry)
-                    if self.profile:
-                        emit('profile', validation=self.profile['validation'], restored=True)
         elif cmd == 'start':
             self.close_camera()
             found = devices()
@@ -166,109 +160,29 @@ class Engine:
                 self.camera = next((d for d in found if d['builtin']), next((d for d in found if not d['phone']), None))
             if self.camera is None:
                 raise ValueError('선택한 카메라가 연결되어 있지 않습니다.')
-            self.cap = cv2.VideoCapture(self.camera['index'], cv2.CAP_AVFOUNDATION)
-            if not self.cap.isOpened():
+            try:
+                self.cap = open_camera(self.camera['index'], 1280, 720, 30, cv2)
+            except RuntimeError as ex:
                 self.close_camera()
-                raise ValueError('카메라를 열 수 없습니다. 시스템 설정의 카메라 권한을 확인해 주세요.')
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-            self.cap.set(cv2.CAP_PROP_FPS, 30)
+                raise ValueError(f'{ex} 카메라 권한과 다른 앱의 사용 여부를 확인해 주세요.')
             self.tracker = FaceTracker()
+            self.mouth.recalibrate()
             self.failures = 0
-            self.profile = load_profile(self.profile_path(), self.camera['id'], self.geometry)
             emit('started', camera=self.camera['name'])
-            if self.profile:
-                emit('profile', validation=self.profile['validation'], restored=True)
         elif cmd == 'stop':
             self.close_camera()
             emit('stopped')
-        elif cmd == 'calibrate':
-            if self.cap is None or not self.geometry:
-                raise ValueError('카메라를 먼저 시작해 주세요.')
-            self.generation = int(c['generation'])
-            self.backup, self.profile = self.profile, None
-            self.calibration = True
-            self.candidate = None
-            self.samples, self.targets, self.checks, self.check_targets = [], [], [], []
-            self.reference = None
-            self.collection = None
-            self.reset_filters()
-            emit('calibration_started', generation=self.generation)
-        elif cmd == 'collect':
-            if not self.calibration or c['generation'] != self.generation:
-                return
-            checking = c.get('phase') == 'check'
-            index = len(self.checks) if checking else len(self.samples)
-            points = CHECK_POINTS if checking else CAL_POINTS
-            if c['index'] != index or index >= len(points) or (checking and self.candidate is None):
-                raise ValueError('보정 순서가 맞지 않습니다. 다시 시작해 주세요.')
-            w, h = self.geometry['width'], self.geometry['height']
-            self.collection = dict(checking=checking, index=index, target=[points[index][0]*w, points[index][1]*h],
-                                   samples=[], heads=[], elapsed=0., begun=time.monotonic(), last_valid=None)
-        elif cmd == 'cancel':
-            self.profile = self.backup
-            self.backup = None
-            self.collection = None
-            self.calibration = False
-            self.reset_filters()
-            emit('cancelled', calibrated=self.profile is not None)
+        elif cmd == 'recenter':
+            self.head_pointer.reset()
+            self.mouth.recalibrate()
+            emit('centering')
+        elif cmd == 'sensitivity':
+            self.head_pointer.sensitivity = c.get('value')
+            emit('sensitivity', value=self.head_pointer.sensitivity)
         elif cmd == 'detect':
             self.detector.submit(c)
         elif cmd == 'list_cameras':
             emit('cameras', devices=devices())
-
-    def sample(self, iris, head, now, valid):
-        c = self.collection
-        if c is None:
-            return
-        if now-c['begun'] > 25:
-            self.collection = None
-            emit('sample_retry', generation=self.generation, message='얼굴·조명·자세를 확인한 후 같은 점을 다시 시도합니다.')
-            return
-        if not valid:
-            c['last_valid'] = None
-            emit('calibration_progress', progress=c['elapsed']/.65, hint='눈을 뜨고 머리를 편안하게 고정해 주세요.')
-            return
-        if c['last_valid'] is not None:
-            c['elapsed'] += min(.1, now-c['last_valid'])
-        c['last_valid'] = now
-        c['samples'].append(iris)
-        c['heads'].append(head)
-        emit('calibration_progress', progress=min(1., c['elapsed']/.65), hint='점을 계속 바라보세요.')
-        if c['elapsed'] < .65 or len(c['samples']) < 12:
-            return
-        try:
-            point = stable_median(c['samples'])
-        except ValueError as ex:
-            self.collection = None
-            emit('sample_retry', generation=self.generation, message=str(ex))
-            return
-        self.collection = None
-        if self.reference is None:
-            self.reference = np.median(c['heads'], axis=0).tolist()
-        if c['checking']:
-            self.checks.append(point)
-            self.check_targets.append(c['target'])
-            if len(self.checks) == len(CHECK_POINTS):
-                metrics = validate(self.candidate, self.checks, self.check_targets,
-                                   [self.geometry['width'], self.geometry['height']])
-                self.calibration = False
-                # Validation measures accuracy; a poor score must not silently disable the cursor.
-                metrics['pointer_usable'] = True
-                self.profile = dict(self.candidate, schema=1, camera_id=self.camera['id'],
-                                    geometry=self.geometry, head_reference=self.reference,
-                                    validation=metrics, created=time.strftime('%Y-%m-%d %H:%M:%S'))
-                save_profile(self.profile_path(), self.profile)
-                print('Calibration result:', metrics, file=sys.stderr, flush=True)
-                self.backup = None
-                emit('calibration_result', validation=metrics, generation=self.generation)
-                return
-        else:
-            self.samples.append(point)
-            self.targets.append(c['target'])
-            if len(self.samples) == len(CAL_POINTS):
-                self.candidate = fit(self.samples, self.targets)
-        emit('sample_done', phase='check' if c['checking'] else 'calibrate', index=c['index'], generation=self.generation)
 
     def frame(self):
         now = time.monotonic()
@@ -286,37 +200,29 @@ class Engine:
         frame = cv2.flip(frame, 1)
         h, w = frame.shape[:2]
         lm, blend = self.tracker.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        features = extract_features(lm, w, h) if lm is not None else None
-        valid = bool(features and features['has_iris'] and features['face_w'] >= 90)
-        reason = '얼굴을 카메라 정면에 두세요.'
-        iris, head = None, None
-        if valid:
-            iris = [features['gaze_x'], features['gaze_y']]
-            head = head_vector(features, w).tolist()
-            if max(blend.get('eyeBlinkLeft', 0), blend.get('eyeBlinkRight', 0)) > .50:
-                valid, reason = False, '눈 깜빡임 감지'
-            reference = self.reference if self.calibration else (self.profile or {}).get('head_reference')
-            if reference is not None and not head_ok(head, reference):
-                valid, reason = False, '보정할 때의 머리 위치로 돌아오거나 다시 보정해 주세요.'
-        self.sample(iris, head, now, valid)
+        features = extract_features(lm, w, h, include_iris=False) if lm is not None else None
+        valid = bool(features and features['face_w'] >= 70)
         dt = max(.001, now-self.last_frame)
         self.last_frame = now
-        data = dict(valid=valid, calibrated=self.profile is not None, fps=round(min(60., 1/dt), 1),
-                    reason='얼굴·눈동자 감지 중' if valid else reason)
-        if valid and self.profile is not None and not self.calibration:
-            xy = predict(self.profile, iris)
-            gw, gh = self.geometry['width'], self.geometry['height']
-            if not np.isfinite(xy).all():
-                data.update(valid=False, reason='시선이 보정 범위를 벗어났습니다.')
-                self.reset_filters()
+        data = dict(valid=False, fps=round(min(60., 1/dt), 1),
+                    reason='얼굴을 카메라 정면에 두세요.')
+        if valid and self.geometry:
+            was_ready = self.head_pointer.reference is not None
+            xy = self.head_pointer.update(features['head_x'], features['head_y'], now,
+                                          self.geometry['width'], self.geometry['height'])
+            if xy is None:
+                data['reason'] = '정면을 보고 잠시 멈춰 주세요 · 중앙 맞추는 중'
             else:
-                # Clamp before filtering so an offscreen estimate cannot freeze the cursor
-                # or leave the filter carrying a large overshoot.
-                xy = np.clip(xy, [0., 0.], [gw-1., gh-1.])
-                xy = [self.filters[i](float(xy[i]), dt) for i in range(2)]
-                data.update(x=max(0., min(gw, xy[0])), y=max(0., min(gh, xy[1])))
-        if not valid:
-            self.reset_filters()
+                if not was_ready:
+                    emit('head_ready')
+                data.update(valid=True, x=xy[0], y=xy[1], reason='고개로 이동 · 입을 벌리면 선택')
+        if valid:
+            fired = self.mouth.update(now, {'blend': blend})
+            data.update(mouth=round(self.mouth.value, 3), mouth_state=self.mouth.state)
+            if fired is not None and data['valid']:
+                emit('gesture_click', gesture='jawopen', x=data['x'], y=data['y'])
+        else:
+            self.mouth.arm_t = None
         if now-self.last_preview > .25:
             preview = cv2.resize(frame, (320, int(h*320/w)))
             ok, jpg = cv2.imencode('.jpg', preview, [cv2.IMWRITE_JPEG_QUALITY, 65])

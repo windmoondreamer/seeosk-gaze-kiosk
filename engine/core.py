@@ -49,10 +49,50 @@ def fit(samples, targets):
     return result
 
 
+def fit_gaze_zones(samples, spreads=None):
+    """Fit 3x3 gaze zones only when calibration separation exceeds measured jitter."""
+    s = np.asarray(samples, dtype=float)
+    if s.shape != (len(CAL_POINTS), 2) or not np.isfinite(s).all():
+        return None
+    if spreads is None:
+        noise = np.zeros(2)
+    else:
+        spread_array = np.asarray(spreads, dtype=float)
+        if spread_array.shape != (len(CAL_POINTS), 2) or not np.isfinite(spread_array).all() or np.any(spread_array < 0):
+            return None
+        noise = spread_array.max(axis=0)
+    cols = [float(np.median(s[np.arange(3)*3+j, 0])) for j in range(3)]
+    rows = [float(np.median(s[i*3:i*3+3, 1])) for i in range(3)]
+
+    def axis(values, axis_noise):
+        delta = np.diff(values)
+        if min(abs(float(v)) for v in delta) < max(.004, float(axis_noise)*1.8) or delta[0]*delta[1] <= 0:
+            return None
+        return dict(cuts=[(values[0]+values[1])/2, (values[1]+values[2])/2],
+                    ascending=bool(delta[0] > 0))
+
+    x, y = axis(cols, noise[0]), axis(rows, noise[1])
+    return None if x is None or y is None else dict(x=x, y=y)
+
+
+def classify_gaze_zone(zones, iris):
+    """Return row-major 0..8 zone, or None when the model is unavailable."""
+    try:
+        def bin_axis(value, axis):
+            a, b = axis['cuts']
+            if axis['ascending']:
+                return 0 if value < a else (1 if value < b else 2)
+            return 2 if value < b else (1 if value < a else 0)
+        return bin_axis(float(iris[1]), zones['y'])*3 + bin_axis(float(iris[0]), zones['x'])
+    except (TypeError, KeyError, ValueError, IndexError):
+        return None
+
+
 def validate(profile, samples, targets, size):
     if len(samples) != len(CHECK_POINTS):
         raise ValueError('확인용 세 점이 모두 필요합니다.')
-    errors = [float(np.linalg.norm(predict(profile, x)-y)) for x, y in zip(samples, targets)]
+    scale = np.asarray(size, dtype=float)
+    errors = [float(np.linalg.norm((predict(profile, x)-y)*scale)) for x, y in zip(samples, targets)]
     mean, p95 = float(np.mean(errors)), float(np.percentile(errors, 95))
     diag = math.hypot(*size)
     mean_limit, p95_limit = min(90., diag*.06), min(150., diag*.11)
@@ -70,14 +110,18 @@ def head_ok(head, reference):
     return bool(np.all(delta[:4] < [.055, .045, .075, .075]) and delta[4] < max(.025, reference[4]*.22))
 
 
-def stable_median(samples):
+def stable_summary(samples):
     s = np.asarray(samples)
     center = np.median(s, axis=0)
     mad = np.maximum(np.median(np.abs(s-center), axis=0), .001)
     good = s[np.all(np.abs(s-center) < 4.5*mad, axis=1)]
     if len(good) < 10 or np.any(np.std(good, axis=0) > [.026, .020]):
         raise ValueError('시선이 흔들렸습니다. 점을 계속 바라봐 주세요.')
-    return np.median(good, axis=0).tolist()
+    return np.median(good, axis=0).tolist(), np.std(good, axis=0).tolist()
+
+
+def stable_median(samples):
+    return stable_summary(samples)[0]
 
 
 def save_profile(path, profile):
@@ -91,7 +135,9 @@ def save_profile(path, profile):
 def load_profile(path, camera_id, geometry):
     try:
         p = json.loads(Path(path).read_text())
-        if p.get('schema') != 1 or p.get('camera_id') != camera_id or p.get('geometry') != geometry:
+        if p.get('schema') != 4 or p.get('camera_id') != camera_id:
+            return None
+        if p.get('geometry') != {'coordinate_space': 'normalized'}:
             return None
         if not (p.get('validation', {}).get('passed') or p.get('validation', {}).get('pointer_usable') is True):
             return None
