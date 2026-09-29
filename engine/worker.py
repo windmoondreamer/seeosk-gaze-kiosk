@@ -26,6 +26,7 @@ from core import (CAL_POINTS, CHECK_POINTS, fit, predict, validate, head_vector,
 from legacy_gaze import FaceTracker, extract_features, OneEuro, ThresholdDetector
 from head_pointer import HeadPointer
 from platform_io import camera_devices, open_camera, user_data_dir
+from preview import blur_background
 if __name__ == '__main__':
     faulthandler.cancel_dump_traceback_later()
     print('Camera libraries loaded.', flush=True)
@@ -97,6 +98,7 @@ class Engine:
     def __init__(self):
         self.head_pointer = HeadPointer()
         self.mouth = ThresholdDetector('jawopen')
+        self.blur_preview = True
         self.commands = queue.Queue()
         self.cap = None
         self.tracker = None
@@ -176,6 +178,9 @@ class Engine:
             self.head_pointer.reset()
             self.mouth.recalibrate()
             emit('centering')
+        elif cmd == 'blur_preview':
+            self.blur_preview = bool(c.get('value', True))
+            emit('blur_preview', value=self.blur_preview)
         elif cmd == 'sensitivity':
             self.head_pointer.sensitivity = c.get('value')
             emit('sensitivity', value=self.head_pointer.sensitivity)
@@ -225,6 +230,8 @@ class Engine:
             self.mouth.arm_t = None
         if now-self.last_preview > .25:
             preview = cv2.resize(frame, (320, int(h*320/w)))
+            if self.blur_preview:
+                preview = blur_background(preview, lm)
             ok, jpg = cv2.imencode('.jpg', preview, [cv2.IMWRITE_JPEG_QUALITY, 65])
             if ok:
                 data['preview'] = base64.b64encode(jpg).decode()

@@ -166,7 +166,7 @@ function loadSample(index){
 }
 window.receive=m=>{
   switch(m.type){
-    case 'ready':state.ready=true;configure();send('sensitivity',{value:Number($('sensitivity').value)/100});controls();if(state.view==='sample'||$('regionMode').value==='yolo')updateRegions();break;
+    case 'ready':state.ready=true;configure();send('sensitivity',{value:Number($('sensitivity').value)/100});send('blur_preview',{value:$('blurPreview').checked});controls();if(state.view==='sample'||$('regionMode').value==='yolo')updateRegions();break;
     case 'cameras':{
       $('camera').replaceChildren();
       for(const d of m.devices){const o=new Option(d.name,String(d.index));$('camera').add(o);}
@@ -185,6 +185,7 @@ window.receive=m=>{
     case 'gesture_click':
       if($('clickMode').value!=='mouth'||state.paused||!state.headReady)break;
       if(screenScope())send('system_click');else selectTarget();break;
+    case 'blur_preview':$('blurPreview').checked=m.value;break;
     case 'pointer_scope':
       $('accessibilitySettings').hidden=m.scope!=='screen'||m.accessibility;break;
     case 'accessibility_status':
@@ -226,6 +227,7 @@ $('pointerScope').onchange=()=>{
   resetGaze();configure();invalidateRegions();
 };
 $('accessibilitySettings').onclick=()=>send('accessibility_settings');
+$('blurPreview').onchange=()=>send('blur_preview',{value:$('blurPreview').checked});
 $('hitReach').oninput=()=>{
   const reach=Number($('hitReach').value);
   targetField.reach=reach;

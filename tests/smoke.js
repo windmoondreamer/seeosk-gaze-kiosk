@@ -138,6 +138,13 @@
     check('a pointer inside another button still wins over the held one',
       targetField.pick(other.x+other.w/2,other.y+other.h/2,performance.now(),state.regions,wide.key)?.key===other.key);
     $('hitReach').value='64';$('hitReach').oninput();
+    // 미리보기 배경 흐리기: 기본으로 켜져 있고 토글이 엔진까지 전달되어야 합니다.
+    check('preview blur is on by default',$('blurPreview').checked);
+    $('blurPreview').checked=false;$('blurPreview').onchange();
+    check('turning blur off reaches the engine',
+      sent.some(m=>m.cmd==='blur_preview'&&m.value===false));
+    receive({type:'blur_preview',value:true});
+    check('the engine can restore the blur checkbox',$('blurPreview').checked);
     $('clickMode').value='mouth';
     receive({type:'tracking',valid:false,reason:'얼굴 미검출'});
     await wait(450);
