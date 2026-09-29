@@ -8,6 +8,40 @@ const targetField=new TargetField();
 const pointer=new GazePointer(targetField);
 const selection=new GazeSelection(targetField);
 let detectTimer, resizeTimer, toastTimer, snapshotRect;
+// macOS 포인터 설정처럼 동작마다 표정을 따로 고릅니다.
+const ACTION_LABELS={left:'선택 / 왼쪽 클릭',right:'오른쪽 클릭',double:'더블 클릭',
+  drag:'드래그 잡기·놓기',pause:'일시정지',recenter:'중앙 다시 맞추기'};
+const GESTURE_LABELS={none:'사용 안 함',jawopen:'입 벌리기',browup:'눈썹 올리기',smile:'미소',
+  pucker:'입 오므리기',cheekpuff:'볼 부풀리기',winkleft:'왼쪽 눈 감기',winkright:'오른쪽 눈 감기',
+  longblink:'두 눈 길게 감기',nod:'고개 끄덕이기'};
+const gestureMap={left:'jawopen',right:'none',double:'none',drag:'none',pause:'none',recenter:'none'};
+
+function buildGestureMap(){
+  const box=$('gestureMap');box.replaceChildren();
+  for(const [action,label] of Object.entries(ACTION_LABELS)){
+    const name=document.createElement('label');
+    name.textContent=label;name.htmlFor=`gesture-${action}`;
+    const select=document.createElement('select');
+    select.id=`gesture-${action}`;
+    for(const [value,text] of Object.entries(GESTURE_LABELS))select.add(new Option(text,value));
+    select.value=gestureMap[action];
+    select.onchange=()=>{
+      // 같은 표정을 두 동작에 쓰면 신호를 구분할 수 없으므로 앞의 것을 해제합니다.
+      if(select.value!=='none')
+        for(const other of Object.keys(ACTION_LABELS))
+          if(other!==action&&gestureMap[other]===select.value){
+            gestureMap[other]='none';$(`gesture-${other}`).value='none';
+          }
+      gestureMap[action]=select.value;sendGestures();
+    };
+    const level=document.createElement('div');
+    level.className='level';level.id=`level-${action}`;
+    level.appendChild(document.createElement('span'));
+    box.append(name,select,level);
+  }
+}
+function sendGestures(){send('gestures',{map:{...gestureMap}});}
+
 function send(cmd, args={}) {
   window.webkit?.messageHandlers?.seeosk?.postMessage({cmd,...args});
 }
@@ -108,9 +142,13 @@ function track(m){
   if(m.preview){$('preview').src=`data:image/jpeg;base64,${m.preview}`;$('preview').hidden=false;$('previewPlaceholder').hidden=true;}
   $('fps').textContent=`${m.fps||'—'} FPS`;$('faceBadge').textContent=m.valid?'얼굴 감지됨':'위치 확인 필요';
   $('trackingHint').textContent=m.reason;state.headValid=m.valid;
-  if(m.mouth!==undefined){
-    $('mouthFill').style.width=`${Math.min(100,Math.round(m.mouth*100))}%`;
-    $('mouthState').textContent=`입벌림 ${m.mouth_state||''}`.trim();
+  if(m.gestures){
+    for(const [action,level] of Object.entries(m.gestures)){
+      const bar=$(`level-${action}`)?.firstElementChild;
+      if(bar)bar.style.width=`${Math.min(100,Math.round(level.value*100))}%`;
+    }
+    const first=Object.values(m.gestures)[0];
+    if(first)$('gestureHint').textContent=`${GESTURE_LABELS[first.gesture]||first.gesture} · ${first.state}`;
   }
   if(!m.valid&&state.headReady&&!state.paused){
     selection.update(NaN,NaN,performance.now(),state.regions);
@@ -166,7 +204,7 @@ function loadSample(index){
 }
 window.receive=m=>{
   switch(m.type){
-    case 'ready':state.ready=true;configure();send('sensitivity',{value:Number($('sensitivity').value)/100});send('blur_preview',{value:$('blurPreview').checked});controls();if(state.view==='sample'||$('regionMode').value==='yolo')updateRegions();break;
+    case 'ready':state.ready=true;configure();send('sensitivity',{value:Number($('sensitivity').value)/100});send('blur_preview',{value:$('blurPreview').checked});sendGestures();controls();if(state.view==='sample'||$('regionMode').value==='yolo')updateRegions();break;
     case 'cameras':{
       $('camera').replaceChildren();
       for(const d of m.devices){const o=new Option(d.name,String(d.index));$('camera').add(o);}
@@ -182,9 +220,24 @@ window.receive=m=>{
     case 'centering':state.headReady=false;resetGaze();controls();break;
     case 'tracking':track(m);break;
     // 입벌림 클릭은 dwell과 같은 반복 잠금을 쓰지 않습니다. 입을 다물었다 다시 벌려야 다음 선택이 됩니다.
-    case 'gesture_click':
+    case 'gesture_action':{
+      if(m.action==='pause'){pause();break;}
+      if(m.action==='recenter'){recenter();break;}
       if($('clickMode').value!=='mouth'||state.paused||!state.headReady)break;
-      if(screenScope())send('system_click');else selectTarget();break;
+      // 화면 전체에서는 실제 마우스 이벤트, 앱 안에서는 왼쪽 클릭만 의미가 있습니다.
+      if(screenScope())send('system_click',{action:m.action});
+      else if(m.action==='left')selectTarget();
+      else toast(`${ACTION_LABELS[m.action]||m.action}은 화면 전체 모드에서만 동작합니다.`);
+      break;
+    }
+    case 'drag_state':
+      $('gestureHint').textContent=m.holding?'드래그를 잡고 있습니다':'드래그를 놓았습니다';break;
+    case 'gestures':
+      for(const action of Object.keys(ACTION_LABELS)){
+        gestureMap[action]=m.map[action]||'none';
+        const select=$(`gesture-${action}`);if(select)select.value=gestureMap[action];
+      }
+      break;
     case 'blur_preview':$('blurPreview').checked=m.value;break;
     case 'pointer_scope':
       $('accessibilitySettings').hidden=m.scope!=='screen'||m.accessibility;break;
@@ -236,8 +289,7 @@ $('hitReach').oninput=()=>{
 };
 $('clickMode').onchange=()=>{
   selection.reset();state.dwellStart=performance.now();state.firedKey=null;
-  $('mouthMeter').hidden=$('clickMode').value!=='mouth';
-  $('mouthState').hidden=$('clickMode').value!=='mouth';
+  $('gestureMap').hidden=$('clickMode').value!=='mouth';
 };
 $('sensitivity').oninput=()=>{
   const percent=Number($('sensitivity').value);
@@ -267,9 +319,9 @@ window.addEventListener('resize',()=>{resetGaze();clearTimeout(resizeTimer);resi
 setInterval(()=>{if(state.lastGaze&&performance.now()-state.lastGaze>350)resetGaze();},100);
 $('kiosk').srcdoc=KIOSK_HTML;
 controls();
-$('mouthMeter').hidden=$('clickMode').value!=='mouth';
-$('mouthState').hidden=$('clickMode').value!=='mouth';
+$('gestureMap').hidden=$('clickMode').value!=='mouth';
 $('hitReach').oninput();
+buildGestureMap();
 send('ui_ready');
 
 $('switchMode').onclick=()=>{if(!switchBoard)openSwitchBoard();};

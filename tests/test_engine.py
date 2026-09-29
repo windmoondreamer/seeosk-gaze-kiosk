@@ -92,10 +92,10 @@ class HeadControlTests(unittest.TestCase):
     def run_mouth(self, e, jaw, frames, emit):
         """입벌림 값을 고정한 채 프레임을 돌리고 그 사이 발생한 gesture_click 수를 셉니다."""
         e.tracker.process.return_value = (object(), {'jawOpen': jaw})
-        before = sum(1 for c in emit.call_args_list if c.args and c.args[0] == 'gesture_click')
+        before = sum(1 for c in emit.call_args_list if c.args and c.args[0] == 'gesture_action')
         for _ in range(frames):
             e.frame()
-        after = sum(1 for c in emit.call_args_list if c.args and c.args[0] == 'gesture_click')
+        after = sum(1 for c in emit.call_args_list if c.args and c.args[0] == 'gesture_action')
         return after-before
 
     def mouth_context(self):
@@ -133,7 +133,7 @@ class HeadControlTests(unittest.TestCase):
             e = self.mouth_engine(clock)
             self.run_mouth(e, .02, 90, emit)
             self.run_mouth(e, .9, 10, emit)
-            clicks = [c for c in emit.call_args_list if c.args and c.args[0] == 'gesture_click']
+            clicks = [c for c in emit.call_args_list if c.args and c.args[0] == 'gesture_action']
             self.assertTrue(clicks)
             self.assertEqual(clicks[-1].kwargs['gesture'], 'jawopen')
             self.assertGreater(clicks[-1].kwargs['x'], 500)
@@ -152,8 +152,52 @@ class HeadControlTests(unittest.TestCase):
             e = self.mouth_engine(clock)
             self.run_mouth(e, .37, 2, emit)
             tracking = [c for c in emit.call_args_list if c.args and c.args[0] == 'tracking']
-            self.assertAlmostEqual(tracking[-1].kwargs['mouth'], .37, places=3)
-            self.assertIn('mouth_state', tracking[-1].kwargs)
+            level = tracking[-1].kwargs['gestures']['left']
+            self.assertAlmostEqual(level['value'], .37, places=3)
+            self.assertEqual(level['gesture'], 'jawopen')
+            self.assertIn('state', level)
+
+    def test_gesture_map_builds_one_detector_per_action(self):
+        with patch.object(worker,'Detector'), patch.object(worker,'emit') as emit:
+            e = worker.Engine()
+            e.handle({'cmd':'gestures','map':{'left':'winkright','right':'browup','double':'nod'}})
+            self.assertEqual(set(e.detectors), {'left','right','double'})
+            self.assertEqual(e.gestures['left'], 'winkright')
+            self.assertIsInstance(e.detectors['double'], worker.NodDetector)
+            self.assertIsInstance(e.detectors['left'], worker.ThresholdDetector)
+            self.assertEqual(emit.call_args.kwargs['map'], e.gestures)
+            self.assertIn('longblink', emit.call_args.kwargs['available'])
+
+    def test_unassigned_and_unknown_gestures_are_dropped(self):
+        with patch.object(worker,'Detector'), patch.object(worker,'emit'):
+            e = worker.Engine()
+            e.handle({'cmd':'gestures','map':{'left':'none','right':'nosuchface','drag':'smile'}})
+            self.assertEqual(set(e.detectors), {'drag'})
+
+    def test_every_documented_expression_can_be_assigned(self):
+        with patch.object(worker,'Detector'), patch.object(worker,'emit'):
+            e = worker.Engine()
+            for name in list(worker.BLEND_GESTURES)+['nod']:
+                e.handle({'cmd':'gestures','map':{'left':name}})
+                self.assertEqual(set(e.detectors), {'left'}, name)
+
+    def test_each_action_fires_from_its_own_expression(self):
+        clock, detector, emitter, extract, monotonic = self.mouth_context()
+        with detector, emitter as emit, extract, monotonic:
+            e = self.mouth_engine(clock)
+            e.handle({'cmd':'gestures','map':{'left':'jawopen','right':'cheekPuff'.lower()}})
+            e.tracker.process.return_value=(object(), {'jawOpen':.02,'cheekPuff':.02})
+            for _ in range(90): e.frame()          # 기준선
+            fired=lambda: [c.kwargs['action'] for c in emit.call_args_list
+                           if c.args and c.args[0]=='gesture_action']
+            before=len(fired())
+            e.tracker.process.return_value=(object(), {'jawOpen':.9,'cheekPuff':.02})
+            for _ in range(10): e.frame()
+            self.assertEqual(fired()[before:], ['left'])
+            before=len(fired())
+            e.tracker.process.return_value=(object(), {'jawOpen':.02,'cheekPuff':.9})
+            for _ in range(30): e.frame()
+            self.assertEqual(fired()[before:], ['right'])
 
     def test_sensitivity_command_clamps_and_reports(self):
         with patch.object(worker,'Detector'), patch.object(worker,'emit') as emit:

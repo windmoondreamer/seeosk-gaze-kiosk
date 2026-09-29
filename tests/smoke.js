@@ -75,17 +75,34 @@
     $('clickMode').value='mouth';
     receive(trackEvent);await wait(50);
     const beforeMouth=$('kiosk').contentWindow.total_list[0];
-    receive({type:'gesture_click',gesture:'jawopen',x:trackEvent.x,y:trackEvent.y});
+    receive({type:'gesture_action',action:'left',gesture:'jawopen',x:trackEvent.x,y:trackEvent.y});
     await wait(250);
     check('mouth open selects the pointed menu',$('kiosk').contentWindow.total_list[0]===beforeMouth+1);
     state.regions=visibleDomRegions();renderRegions();
     receive(trackEvent);await wait(50);
     const beforePaused=$('kiosk').contentWindow.total_list[0];
-    pause();receive({type:'gesture_click',gesture:'jawopen'});await wait(150);
+    pause();receive({type:'gesture_action',action:'left',gesture:'jawopen'});await wait(150);
     check('mouth click is ignored while paused',$('kiosk').contentWindow.total_list[0]===beforePaused);
     pause();receive(trackEvent);await wait(50);
-    receive({type:'tracking',valid:true,x:trackEvent.x,y:trackEvent.y,reason:'입벌림',fps:30,mouth:0.62,mouth_state:'조준'});
-    check('mouth meter reflects the engine value',$('mouthFill').style.width==='62%');
+    receive({type:'tracking',valid:true,x:trackEvent.x,y:trackEvent.y,reason:'입벌림',fps:30,
+      gestures:{left:{gesture:'jawopen',value:0.62,state:'조준'}}});
+    check('the level bar reflects the engine value',$('level-left').firstElementChild.style.width==='62%');
+    // macOS 포인터 설정처럼 동작마다 표정을 따로 고릅니다.
+    check('every action has its own expression selector',
+      Object.keys(ACTION_LABELS).every(a=>!!$(`gesture-${a}`)));
+    $('gesture-right').value='winkright';$('gesture-right').onchange();
+    check('choosing an expression reaches the engine',
+      sent.some(m=>m.cmd==='gestures'&&m.map.right==='winkright'));
+    $('gesture-double').value='winkright';$('gesture-double').onchange();
+    check('reusing an expression releases the earlier action',
+      $('gesture-right').value==='none'&&gestureMap.right==='none');
+    receive({type:'gestures',map:{left:'jawopen',pause:'longblink'}});
+    check('the engine can restore the mapping',
+      $('gesture-pause').value==='longblink'&&$('gesture-double').value==='none');
+    const beforePauseGesture=state.paused;
+    receive({type:'gesture_action',action:'pause',gesture:'longblink'});
+    check('a pause expression pauses without clicking',state.paused!==beforePauseGesture);
+    receive({type:'gesture_action',action:'pause',gesture:'longblink'});
     $('sensitivity').value='40';$('sensitivity').oninput();
     check('sensitivity slider reports a 0-1 value',sent.some(m=>m.cmd==='sensitivity'&&Math.abs(m.value-0.4)<1e-6));
     receive({type:'sensitivity',value:0.25});
@@ -100,7 +117,7 @@
     receive(trackEvent);await wait(50);
     check('screen scope hides the in-app pointer dot',$('gaze').hidden);
     const beforeScope=$('kiosk').contentWindow.total_list[0];
-    receive({type:'gesture_click',gesture:'jawopen'});await wait(150);
+    receive({type:'gesture_action',action:'left',gesture:'jawopen'});await wait(150);
     check('screen scope sends a real system click instead of an in-app one',
       sent.some(m=>m.cmd==='system_click')&&$('kiosk').contentWindow.total_list[0]===beforeScope);
     receive({type:'accessibility_status',trusted:false});

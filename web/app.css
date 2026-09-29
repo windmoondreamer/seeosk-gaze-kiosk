@@ -15,3 +15,9 @@ aside input[type=range]{width:100%;margin:4px 0 2px;accent-color:#2f6fed}
 aside label b{float:right;font-weight:600;color:#2f6fed}
 
 #scopeHint{margin-top:4px}
+
+.gesture-map{display:grid;grid-template-columns:1fr 1.2fr;gap:6px 8px;align-items:center;margin:8px 0 4px}
+.gesture-map label{margin:0;font-size:12px}
+.gesture-map select{margin:0;width:100%}
+.gesture-map .level{grid-column:1/-1;height:6px;border-radius:3px;background:#e6e9f0;overflow:hidden}
+.gesture-map .level span{display:block;height:100%;width:0;background:#2f6fed;transition:width .08s linear}

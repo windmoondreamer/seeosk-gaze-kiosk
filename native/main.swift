@@ -17,6 +17,7 @@ final class SeeOSKDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, W
     let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/SeeOSK")
     var uiReady = false
     var pointerScope = "app"   // "app": 앱 창 안에서만, "screen": 화면 전체
+    var dragging = false       // 화면 전체 모드에서 드래그가 눌린 상태인지
     var quitting = false
     var smokeStarted = false
     let smoke = CommandLine.arguments.contains("--smoke-test")
@@ -226,11 +227,12 @@ final class SeeOSKDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, W
             }
         }
         case "pointer_scope":
+            if dragging {_=systemClick("drag")}
             pointerScope = (m["scope"] as? String) == "screen" ? "screen" : "app"
             event(["type":"pointer_scope","scope":pointerScope,
                    "screen":["width":NSScreen.main?.frame.width ?? 0,"height":NSScreen.main?.frame.height ?? 0],
                    "accessibility":AXIsProcessTrusted()])
-        case "system_click":_=systemClick()
+        case "system_click":_=systemClick((m["action"] as? String) ?? "left")
         case "accessibility_settings":
             NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
         case "accessibility_status":
@@ -270,16 +272,36 @@ final class SeeOSKDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, W
         return true
     }
 
-    /// 화면 전체 모드의 입벌림 클릭. 손쉬운 사용 권한이 있어야 다른 앱에 전달됩니다.
-    func systemClick() -> Bool {
+    /// 화면 전체 모드의 표정 동작. 손쉬운 사용 권한이 있어야 다른 앱에 전달됩니다.
+    /// action: left / right / double / drag. drag 는 눌림 상태를 토글합니다.
+    func systemClick(_ action:String = "left") -> Bool {
         guard AXIsProcessTrusted() else {
             event(["type":"accessibility_needed",
                    "message":"화면 전체 클릭은 시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용에서 SeeOSK를 켜야 동작합니다."])
             return false
         }
         let point = currentCursor()
-        for type in [CGEventType.leftMouseDown, .leftMouseUp] {
-            guard let e = CGEvent(mouseEventSource:nil, mouseType:type, mouseCursorPosition:point, mouseButton:.left) else {return false}
+        switch action {
+        case "right":
+            return post([.rightMouseDown, .rightMouseUp], at:point, button:.right)
+        case "double":
+            // 두 번째 눌림에 clickState 2 를 넣어야 시스템이 더블 클릭으로 받습니다.
+            guard post([.leftMouseDown, .leftMouseUp], at:point, button:.left) else {return false}
+            return post([.leftMouseDown, .leftMouseUp], at:point, button:.left, clickState:2)
+        case "drag":
+            dragging = !dragging
+            let ok = post([dragging ? .leftMouseDown : .leftMouseUp], at:point, button:.left)
+            event(["type":"drag_state","holding":dragging])
+            return ok
+        default:
+            return post([.leftMouseDown, .leftMouseUp], at:point, button:.left)
+        }
+    }
+
+    func post(_ types:[CGEventType], at point:CGPoint, button:CGMouseButton, clickState:Int64 = 1) -> Bool {
+        for type in types {
+            guard let e = CGEvent(mouseEventSource:nil, mouseType:type, mouseCursorPosition:point, mouseButton:button) else {return false}
+            e.setIntegerValueField(.mouseEventClickState, value:clickState)
             e.post(tap:.cghidEventTap)
         }
         return true

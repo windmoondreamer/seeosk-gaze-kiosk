@@ -23,7 +23,8 @@ import numpy as np
 from core import (CAL_POINTS, CHECK_POINTS, fit, predict, validate, head_vector,
                   head_ok, stable_summary, save_profile, load_profile,
                   fit_gaze_zones, classify_gaze_zone)
-from legacy_gaze import FaceTracker, extract_features, OneEuro, ThresholdDetector
+from legacy_gaze import (FaceTracker, extract_features, OneEuro, ThresholdDetector,
+                         NodDetector, BLEND_GESTURES)
 from head_pointer import HeadPointer
 from platform_io import camera_devices, open_camera, user_data_dir
 from preview import blur_background
@@ -94,10 +95,25 @@ class Detector:
                     Path(job['path']).unlink(missing_ok=True)
 
 
+# macOS 포인터 설정처럼 동작마다 표정을 따로 지정합니다.
+ACTIONS = ('left', 'right', 'double', 'drag', 'pause', 'recenter')
+DEFAULT_GESTURES = {'left': 'jawopen'}
+
+
+def make_detector(name):
+    """표정 이름으로 검출기를 만듭니다. 쓰지 않는 동작은 None."""
+    if name in BLEND_GESTURES:
+        return ThresholdDetector(name)
+    if name == 'nod':
+        return NodDetector()
+    return None
+
+
 class Engine:
     def __init__(self):
         self.head_pointer = HeadPointer()
-        self.mouth = ThresholdDetector('jawopen')
+        self.gestures = dict(DEFAULT_GESTURES)
+        self.detectors = {a: make_detector(g) for a, g in self.gestures.items()}
         self.blur_preview = True
         self.commands = queue.Queue()
         self.cap = None
@@ -118,6 +134,10 @@ class Engine:
         self.last_frame = time.monotonic()
         self.last_preview = 0
         self.failures = 0
+
+    def recalibrate_gestures(self):
+        for detector in self.detectors.values():
+            detector.recalibrate()
 
     def profile_path(self):
         key = hashlib.sha256(self.camera['id'].encode()).hexdigest()[:16]
@@ -168,7 +188,7 @@ class Engine:
                 self.close_camera()
                 raise ValueError(f'{ex} 카메라 권한과 다른 앱의 사용 여부를 확인해 주세요.')
             self.tracker = FaceTracker()
-            self.mouth.recalibrate()
+            self.recalibrate_gestures()
             self.failures = 0
             emit('started', camera=self.camera['name'])
         elif cmd == 'stop':
@@ -176,8 +196,16 @@ class Engine:
             emit('stopped')
         elif cmd == 'recenter':
             self.head_pointer.reset()
-            self.mouth.recalibrate()
+            self.recalibrate_gestures()
             emit('centering')
+        elif cmd == 'gestures':
+            requested = c.get('map') or {}
+            self.gestures = {a: requested[a] for a in ACTIONS
+                             if requested.get(a) and requested[a] != 'none'}
+            self.detectors = {a: make_detector(g) for a, g in self.gestures.items()}
+            self.detectors = {a: d for a, d in self.detectors.items() if d is not None}
+            self.gestures = {a: g for a, g in self.gestures.items() if a in self.detectors}
+            emit('gestures', map=self.gestures, available=list(BLEND_GESTURES)+['nod'])
         elif cmd == 'blur_preview':
             self.blur_preview = bool(c.get('value', True))
             emit('blur_preview', value=self.blur_preview)
@@ -222,12 +250,28 @@ class Engine:
                     emit('head_ready')
                 data.update(valid=True, x=xy[0], y=xy[1], reason='고개로 이동 · 입을 벌리면 선택')
         if valid:
-            fired = self.mouth.update(now, {'blend': blend})
-            data.update(mouth=round(self.mouth.value, 3), mouth_state=self.mouth.state)
-            if fired is not None and data['valid']:
-                emit('gesture_click', gesture='jawopen', x=data['x'], y=data['y'])
+            ctx = {'blend': blend, 'head_y': features['head_y']}
+            levels = {}
+            for action, detector in self.detectors.items():
+                fired = detector.update(now, ctx)
+                levels[action] = dict(gesture=self.gestures[action],
+                                      value=round(float(detector.value), 3),
+                                      state=detector.state)
+                # 포인터 좌표가 필요한 동작은 추적이 유효할 때만 발사합니다.
+                if fired is None:
+                    continue
+                if action in ('left', 'right', 'double', 'drag') and not data['valid']:
+                    continue
+                emit('gesture_action', action=action, gesture=self.gestures[action],
+                     x=data.get('x'), y=data.get('y'))
+            data['gestures'] = levels
         else:
-            self.mouth.arm_t = None
+            for detector in self.detectors.values():
+                # 얼굴이 없는 동안 조준 상태를 지웁니다.
+                if hasattr(detector, 'arm_t'):
+                    detector.arm_t = None
+                if hasattr(detector, 'down_t'):
+                    detector.down_t = None
         if now-self.last_preview > .25:
             preview = cv2.resize(frame, (320, int(h*320/w)))
             if self.blur_preview:
