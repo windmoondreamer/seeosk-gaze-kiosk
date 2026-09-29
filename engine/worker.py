@@ -100,9 +100,15 @@ ACTIONS = ('left', 'right', 'double', 'drag', 'pause', 'recenter')
 DEFAULT_GESTURES = {'left': 'jawopen'}
 # 표정을 얼마나 크게 지어야 하는지. 1에 가까울수록 작은 움직임에도 반응합니다.
 DEFAULT_GESTURE_SENSITIVITY = .65
-# 표정별 기준 상한. 윙크는 좌우 차이를, 미소는 양쪽 평균을 쓰므로 원래 값이 너무 높았습니다.
-HARD_MARGIN_CAP = {'smile': .16, 'winkleft': .22, 'winkright': .22,
-                   'longblink': .28, 'pucker': .20, 'cheekpuff': .16, 'browup': .20}
+# 표정별 기준 상한. 신호가 작게 나오는 표정일수록 낮춰야 조금만 지어도 인정됩니다.
+HARD_MARGIN_CAP = {'smile': .05, 'winkleft': .14, 'winkright': .14,
+                   'longblink': .20, 'pucker': .12, 'cheekpuff': .07, 'browup': .12,
+                   'jawopen': .20}
+# 잡음 기준(k_on x 표준편차)이 위 상한보다 커지면 상한을 낮춘 의미가 없어집니다.
+# 신호가 작은 표정은 이 배수도 함께 낮춥니다.
+NOISE_SCALE = {'smile': .35, 'cheekpuff': .45, 'winkleft': .6, 'winkright': .6,
+               'pucker': .6, 'browup': .6}
+MARGIN_FLOOR = .015
 
 
 def clamp_sensitivity(value, fallback=DEFAULT_GESTURE_SENSITIVITY):
@@ -154,8 +160,8 @@ def make_detector(name, sensitivity=DEFAULT_GESTURE_SENSITIVITY):
     if name in BLEND_GESTURES:
         # 미소·윙크는 원래 기준이 높아 조금 지어서는 넘지 못했습니다. 표정마다 상한을 둡니다.
         base = min(BLEND_GESTURES[name][1], HARD_MARGIN_CAP.get(name, .30))
-        return ThresholdDetector(name, k_on=6.*noise_scale,
-                                 min_margin=max(.03, base*margin_scale),
+        return ThresholdDetector(name, k_on=6.*noise_scale*NOISE_SCALE.get(name, 1.),
+                                 min_margin=max(MARGIN_FLOOR, base*margin_scale),
                                  hold=.10)
     if name == 'nod':
         return NodDetector(amp=max(.02, .055*noise_scale))

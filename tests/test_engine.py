@@ -165,15 +165,29 @@ class HeadControlTests(unittest.TestCase):
         self.assertGreater(default.min_margin, high.min_margin)
         # 기본값은 원래 임계값의 절반 아래여야 "조금만 벌려도" 눌립니다.
         self.assertLess(default.min_margin, low.min_margin/2)
-        self.assertGreaterEqual(high.min_margin, .03)
+        self.assertGreaterEqual(high.min_margin, worker.MARGIN_FLOOR)
         self.assertLess(high.k_on, low.k_on)
 
     def test_hard_to_reach_expressions_were_brought_down(self):
         # 미소와 윙크는 원래 기준이 높아 크게 지어야 넘었습니다.
-        for name, ceiling in (('smile', .10), ('winkleft', .13), ('winkright', .13)):
+        # 평상시 표준편차 0.02를 가정해도 기준을 넘어야 합니다. 잡음 기준이 상한을 덮어쓰면 안 됩니다.
+        for name, ceiling in (('smile', .045), ('cheekpuff', .05), ('winkleft', .08),
+                              ('winkright', .08), ('browup', .07), ('pucker', .07)):
             d = worker.make_detector(name)
-            threshold = .02+max(d.k_on*.01, d.min_margin)
+            threshold = .01+max(d.k_on*.02, d.min_margin)
             self.assertLess(threshold, ceiling, name)
+
+    def test_a_light_smile_is_enough_at_the_default_sensitivity(self):
+        d = worker.make_detector('smile')
+        t = 0.
+        fired = []
+        for i in range(200):
+            t += .04
+            value = .01 if t < 3.5 else .12      # 살짝만 웃은 정도
+            f = d.update(t, {'blend': {'mouthSmileLeft': value, 'mouthSmileRight': value}})
+            if f is not None:
+                fired.append(t)
+        self.assertTrue(fired, f'on_thr={d.on_thr:.3f}')
 
     def test_every_expression_reports_a_live_level(self):
         blend = {'jawOpen':.4,'eyeBlinkLeft':.8,'eyeBlinkRight':.1,
