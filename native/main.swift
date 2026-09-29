@@ -2,6 +2,7 @@ import AppKit
 import WebKit
 import AVFoundation
 import CoreGraphics
+import ApplicationServices
 
 final class SeeOSKDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
     var window: NSWindow!
@@ -15,10 +16,12 @@ final class SeeOSKDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, W
     let resources = Bundle.main.resourceURL!
     let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/SeeOSK")
     var uiReady = false
+    var pointerScope = "app"   // "app": 앱 창 안에서만, "screen": 화면 전체
     var quitting = false
     var smokeStarted = false
     let smoke = CommandLine.arguments.contains("--smoke-test")
     let cameraCheck = CommandLine.arguments.contains("--camera-check")
+    let pointerCheck = CommandLine.arguments.contains("--pointer-check")
     var smokeFolder: URL {
         if let i = CommandLine.arguments.firstIndex(of: "--output"), CommandLine.arguments.count > i+1 {
             return URL(fileURLWithPath: CommandLine.arguments[i+1], isDirectory: true)
@@ -60,6 +63,28 @@ final class SeeOSKDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, W
             DispatchQueue.main.asyncAfter(deadline:.now()+90) { [weak self] in
                 guard let self=self, !self.quitting else {return}
                 self.finishSmoke(["passed":false,"error":"Native smoke test timed out"])
+            }
+        }
+        if pointerCheck {
+            DispatchQueue.main.asyncAfter(deadline:.now()+2) { [weak self] in
+                guard let self=self, let display=NSScreen.main?.frame else {return}
+                self.log("pointer-check: AXIsProcessTrusted=\(AXIsProcessTrusted())")
+                self.log("pointer-check: display=\(display.width)x\(display.height)")
+                let origin=self.currentCursor()
+                self.pointerScope="screen"
+                // 앱 창 밖 좌표를 포함해 실제로 커서가 가는지 확인합니다. 클릭은 하지 않습니다.
+                for target in [CGPoint(x:40,y:40),
+                               CGPoint(x:display.width-40,y:40),
+                               CGPoint(x:display.width/2,y:display.height-60)] {
+                    let moved=self.warpToScreen(x:Double(target.x), y:Double(target.y))
+                    usleep(250_000)
+                    let now=self.currentCursor()
+                    let error=hypot(now.x-target.x, now.y-target.y)
+                    self.log("pointer-check: 목표=(\(Int(target.x)),\(Int(target.y))) 결과=(\(Int(now.x)),\(Int(now.y))) 오차=\(Int(error))px 반환=\(moved)")
+                }
+                _=self.warpToScreen(x:Double(origin.x), y:Double(origin.y))
+                self.log("pointer-check: done")
+                NSApp.terminate(nil)
             }
         }
         if cameraCheck {
@@ -200,6 +225,16 @@ final class SeeOSKDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, W
                 }
             }
         }
+        case "pointer_scope":
+            pointerScope = (m["scope"] as? String) == "screen" ? "screen" : "app"
+            event(["type":"pointer_scope","scope":pointerScope,
+                   "screen":["width":NSScreen.main?.frame.width ?? 0,"height":NSScreen.main?.frame.height ?? 0],
+                   "accessibility":AXIsProcessTrusted()])
+        case "system_click":_=systemClick()
+        case "accessibility_settings":
+            NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+        case "accessibility_status":
+            event(["type":"accessibility_status","trusted":AXIsProcessTrusted()])
         case "snapshot":snapshot(m)
         case "detect_sample":
             guard let name=m["filename"] as? String,!name.contains("/"),name.hasSuffix(".png") else{return}
@@ -211,14 +246,48 @@ final class SeeOSKDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, W
 
     // Gaze coordinates are CSS points in the web content, not Retina pixels.
     func moveCursor(_ m:[String:Any]) -> Bool {
+        guard let x=m["x"] as? Double, let y=m["y"] as? Double,
+              x.isFinite, y.isFinite, x>=0, y>=0 else {return false}
+        if pointerScope == "screen" {return warpToScreen(x:x, y:y)}
         guard window.isKeyWindow, NSApp.isActive,
-              let x=m["x"] as? Double, let y=m["y"] as? Double,
-              x.isFinite, y.isFinite, x>=0, y>=0,
               x<=web.bounds.width, y<=web.bounds.height else {return false}
         let local=NSPoint(x:min(x,web.bounds.width-1), y:web.isFlipped ? min(y,web.bounds.height-1) : web.bounds.height-min(y,web.bounds.height-1))
         let screen=window.convertPoint(toScreen:web.convert(local,to:nil))
         let point=CGPoint(x:screen.x,y:(NSScreen.screens.first?.frame.maxY ?? 0)-screen.y)
         return CGWarpMouseCursorPosition(point) == .success
+    }
+
+    /// 화면 전체 모드. 좌표는 이미 좌상단 기준 화면 포인트입니다.
+    /// 워프만 하면 다른 앱이 마우스 이동을 알아채지 못하므로 이동 이벤트도 함께 보냅니다.
+    func warpToScreen(x:Double, y:Double) -> Bool {
+        guard let display = NSScreen.main?.frame else {return false}
+        let point = CGPoint(x: min(max(0, x), display.width-1), y: min(max(0, y), display.height-1))
+        guard CGWarpMouseCursorPosition(point) == .success else {return false}
+        CGAssociateMouseAndMouseCursorPosition(1)
+        if let move = CGEvent(mouseEventSource:nil, mouseType:.mouseMoved, mouseCursorPosition:point, mouseButton:.left) {
+            move.post(tap:.cghidEventTap)
+        }
+        return true
+    }
+
+    /// 화면 전체 모드의 입벌림 클릭. 손쉬운 사용 권한이 있어야 다른 앱에 전달됩니다.
+    func systemClick() -> Bool {
+        guard AXIsProcessTrusted() else {
+            event(["type":"accessibility_needed",
+                   "message":"화면 전체 클릭은 시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용에서 SeeOSK를 켜야 동작합니다."])
+            return false
+        }
+        let point = currentCursor()
+        for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+            guard let e = CGEvent(mouseEventSource:nil, mouseType:type, mouseCursorPosition:point, mouseButton:.left) else {return false}
+            e.post(tap:.cghidEventTap)
+        }
+        return true
+    }
+
+    func currentCursor() -> CGPoint {
+        let location = NSEvent.mouseLocation
+        return CGPoint(x: location.x, y: (NSScreen.screens.first?.frame.maxY ?? 0) - location.y)
     }
 
     func snapshot(_ message:[String:Any]) {

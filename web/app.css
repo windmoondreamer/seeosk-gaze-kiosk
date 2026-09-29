@@ -13,3 +13,5 @@
 .mouth-meter span{display:block;height:100%;width:0;border-radius:5px;background:#2f6fed;transition:width .08s linear}
 aside input[type=range]{width:100%;margin:4px 0 2px;accent-color:#2f6fed}
 aside label b{float:right;font-weight:600;color:#2f6fed}
+
+#scopeHint{margin-top:4px}

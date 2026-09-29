@@ -90,6 +90,27 @@
     check('sensitivity slider reports a 0-1 value',sent.some(m=>m.cmd==='sensitivity'&&Math.abs(m.value-0.4)<1e-6));
     receive({type:'sensitivity',value:0.25});
     check('engine sensitivity updates the slider',$('sensitivity').value==='25'&&$('sensitivityValue').textContent==='25%');
+    // 화면 전체 모드: 고개 범위를 디스플레이에 맞추고 입벌림을 실제 클릭으로 내보냅니다.
+    $('pointerScope').value='screen';$('pointerScope').onchange();
+    check('screen scope asks the app for system-wide pointing',
+      sent.some(m=>m.cmd==='pointer_scope'&&m.scope==='screen'));
+    check('screen scope maps head movement onto the display',
+      sent.some(m=>m.cmd==='configure'&&m.geometry.width===screen.width&&m.geometry.height===screen.height));
+    state.regions=visibleDomRegions();renderRegions();
+    receive(trackEvent);await wait(50);
+    check('screen scope hides the in-app pointer dot',$('gaze').hidden);
+    const beforeScope=$('kiosk').contentWindow.total_list[0];
+    receive({type:'gesture_click',gesture:'jawopen'});await wait(150);
+    check('screen scope sends a real system click instead of an in-app one',
+      sent.some(m=>m.cmd==='system_click')&&$('kiosk').contentWindow.total_list[0]===beforeScope);
+    receive({type:'accessibility_status',trusted:false});
+    check('missing accessibility permission surfaces a settings shortcut',!$('accessibilitySettings').hidden);
+    receive({type:'accessibility_status',trusted:true});
+    check('granted accessibility permission hides the shortcut',$('accessibilitySettings').hidden);
+    $('pointerScope').value='app';$('pointerScope').onchange();
+    check('app scope restores window-sized head mapping',
+      sent.filter(m=>m.cmd==='configure').pop().geometry.width===innerWidth);
+    state.regions=visibleDomRegions();renderRegions();
     $('clickMode').value='mouth';
     receive({type:'tracking',valid:false,reason:'얼굴 미검출'});
     await wait(450);

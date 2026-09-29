@@ -11,7 +11,9 @@ function send(cmd, args={}) {
 }
 function toast(message) { $('toast').textContent=message; $('toast').hidden=false; clearTimeout(toastTimer); toastTimer=setTimeout(()=>$('toast').hidden=true,5500); }
 function badge(text,live=false){$('statusBadge').textContent=text;$('statusBadge').classList.toggle('live',live);}
-function geometry(){return {width:innerWidth,height:innerHeight};}
+function screenScope(){return $('pointerScope').value==='screen';}
+// 화면 전체 모드에서는 고개 범위를 디스플레이 전체에 대응시킵니다.
+function geometry(){return screenScope()?{width:screen.width,height:screen.height}:{width:innerWidth,height:innerHeight};}
 function configure(){send('configure',{geometry:geometry()});}
 function resetGaze(){
   pointer.reset();selection.reset();
@@ -120,6 +122,12 @@ function track(m){
   // Use the same stabilized coordinates for cursor and menu hit testing.
   // Previously raw frame coordinates drove selection, so the cursor could
   // visibly sit on a button while the hit test flickered outside it.
+  if(screenScope()){
+    // 실제 시스템 커서가 포인터이므로 앱 안의 파란 점은 감춥니다.
+    $('gaze').hidden=true;
+    $('selection').textContent='화면 전체 조작 중 · 입을 벌리면 클릭';
+    return;
+  }
   const choice=selection.update(stabilized.x,stabilized.y,now,state.regions);
   const active=choice.target;
   if(state.active?.key!==active?.key){
@@ -174,7 +182,13 @@ window.receive=m=>{
     // 입벌림 클릭은 dwell과 같은 반복 잠금을 쓰지 않습니다. 입을 다물었다 다시 벌려야 다음 선택이 됩니다.
     case 'gesture_click':
       if($('clickMode').value!=='mouth'||state.paused||!state.headReady)break;
-      selectTarget();break;
+      if(screenScope())send('system_click');else selectTarget();break;
+    case 'pointer_scope':
+      $('accessibilitySettings').hidden=m.scope!=='screen'||m.accessibility;break;
+    case 'accessibility_status':
+      $('accessibilitySettings').hidden=!screenScope()||m.trusted;break;
+    case 'accessibility_needed':
+      $('accessibilitySettings').hidden=false;toast(m.message);break;
     case 'sensitivity':
       $('sensitivity').value=String(Math.round(m.value*100));
       $('sensitivityValue').textContent=`${Math.round(m.value*100)}%`;break;
@@ -201,6 +215,15 @@ $('permissions').onclick=()=>send('permissions');$('fullscreen').onclick=()=>sen
 $('kioskTab').onclick=()=>switchView('kiosk');$('sampleTab').onclick=()=>switchView('sample');
 $('resetKiosk').onclick=()=>{$('kiosk').srcdoc=KIOSK_HTML;invalidateRegions();};
 $('regionMode').onchange=invalidateRegions;$('showRegions').onchange=()=>{$('regionLayer').hidden=!$('showRegions').checked;};
+$('pointerScope').onchange=()=>{
+  const wide=screenScope();
+  $('scopeHint').textContent=wide
+    ?'화면 전체에서 포인터가 움직이고 입벌림이 실제 클릭으로 나갑니다. 손쉬운 사용 권한이 필요합니다.'
+    :'키오스크 화면 안에서만 포인터가 움직입니다.';
+  send('pointer_scope',{scope:wide?'screen':'app'});
+  resetGaze();configure();invalidateRegions();
+};
+$('accessibilitySettings').onclick=()=>send('accessibility_settings');
 $('clickMode').onchange=()=>{
   selection.reset();state.dwellStart=performance.now();state.firedKey=null;
   $('mouthMeter').hidden=$('clickMode').value!=='mouth';
