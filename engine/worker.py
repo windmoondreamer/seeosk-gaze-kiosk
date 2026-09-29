@@ -115,6 +115,18 @@ def clamp_sensitivity(value, fallback=DEFAULT_GESTURE_SENSITIVITY):
     return max(0., min(1., value))
 
 
+def expression_thresholds(sensitivity):
+    """표정별 대략적인 클릭 기준값. 막대 색을 실제 설정과 맞추기 위한 값입니다.
+
+    실제 발사 기준은 여기에 시작 직후 잰 평상시 값이 더해지므로 정확히 같지는 않습니다.
+    """
+    values = {}
+    for name in BLEND_GESTURES:
+        detector = make_detector(name, sensitivity)
+        values[name] = round(float(detector.min_margin), 3)
+    return values
+
+
 def expression_levels(blend):
     """표정 9종의 현재 신호값. 어떤 표정이 실제로 잡히는지 눈으로 보기 위한 값입니다."""
     levels = {}
@@ -251,13 +263,13 @@ class Engine:
             self.gestures = {a: requested[a] for a in ACTIONS
                              if requested.get(a) and requested[a] != 'none'}
             self.rebuild_detectors()
-            emit('gestures', map=self.gestures, available=list(BLEND_GESTURES)+['nod'])
+            emit('gestures', map=self.gestures, available=list(BLEND_GESTURES)+['nod'],
+                 thresholds=expression_thresholds(self.gesture_sensitivity))
         elif cmd == 'gesture_sensitivity':
             self.gesture_sensitivity = clamp_sensitivity(c.get('value'), self.gesture_sensitivity)
             self.rebuild_detectors()
             emit('gesture_sensitivity', value=self.gesture_sensitivity,
-                 thresholds={a: round(float(getattr(d, 'min_margin', getattr(d, 'amp', 0))), 3)
-                             for a, d in self.detectors.items()})
+                 thresholds=expression_thresholds(self.gesture_sensitivity))
         elif cmd == 'blur_preview':
             self.blur_preview = bool(c.get('value', True))
             emit('blur_preview', value=self.blur_preview)

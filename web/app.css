@@ -28,3 +28,8 @@ aside label b{float:right;font-weight:600;color:#2f6fed}
 .expr-live i b{display:block;height:100%;width:0;background:#7fae4a;transition:width .08s linear}
 .expr-live .on b{background:#2f6fed}
 .expr-live em{font-style:normal;text-align:right;color:#8d968a;font-variant-numeric:tabular-nums}
+
+.expr-live div{grid-template-columns:70px 1fr 32px auto}
+.use-expr{padding:3px 7px;font-size:10px;border-radius:7px;font-weight:600}
+.use-expr:disabled{background:#d9efab;border-color:#d9efab;color:#24371d;opacity:1}
+.expr-live .assigned span{color:#2f6fed;font-weight:600}

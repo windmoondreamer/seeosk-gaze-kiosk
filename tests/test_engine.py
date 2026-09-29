@@ -193,7 +193,10 @@ class HeadControlTests(unittest.TestCase):
             e.handle({'cmd':'gesture_sensitivity','value':.0})
             self.assertGreater(e.detectors['left'].min_margin, before)
             self.assertAlmostEqual(emit.call_args.kwargs['value'], .0)
-            self.assertIn('left', emit.call_args.kwargs['thresholds'])
+            # 기준값은 동작이 아니라 표정 단위로 알려 줍니다. 배정하지 않은 표정의 막대도 색이 맞아야 합니다.
+            thresholds = emit.call_args.kwargs['thresholds']
+            self.assertEqual(set(thresholds), set(worker.BLEND_GESTURES))
+            self.assertGreater(thresholds['jawopen'], worker.expression_thresholds(1.)['jawopen'])
 
     def test_a_broken_sensitivity_keeps_the_previous_one(self):
         with patch.object(worker,'Detector'), patch.object(worker,'emit'):

@@ -32,7 +32,7 @@ function buildGestureMap(){
           if(other!==action&&gestureMap[other]===select.value){
             gestureMap[other]='none';$(`gesture-${other}`).value='none';
           }
-      gestureMap[action]=select.value;sendGestures();
+      gestureMap[action]=select.value;sendGestures();markAssigned();
     };
     const level=document.createElement('div');
     level.className='level';level.id=`level-${action}`;
@@ -51,7 +51,31 @@ function buildExpressionLive(){
     const label=document.createElement('span');label.textContent=GESTURE_LABELS[name]||name;
     const bar=document.createElement('i');bar.appendChild(document.createElement('b'));
     const value=document.createElement('em');value.textContent='0.00';
-    row.append(label,bar,value);box.appendChild(row);
+    // 막대를 보고 바로 배정할 수 있어야 합니다. 배정하지 않으면 값이 올라가도 클릭되지 않습니다.
+    const use=document.createElement('button');
+    use.className='use-expr';use.textContent='선택에 쓰기';
+    use.onclick=()=>{
+      for(const other of Object.keys(ACTION_LABELS))
+        if(gestureMap[other]===name)gestureMap[other]='none';
+      gestureMap.left=name;
+      for(const action of Object.keys(ACTION_LABELS)){
+        const select=$(`gesture-${action}`);if(select)select.value=gestureMap[action];
+      }
+      sendGestures();markAssigned();
+      toast(`${GESTURE_LABELS[name]}(으)로 선택합니다.`);
+    };
+    row.append(label,bar,value,use);box.appendChild(row);
+  }
+  markAssigned();
+}
+function markAssigned(){
+  const used=new Set(Object.values(gestureMap).filter(v=>v&&v!=='none'));
+  for(const name of EXPRESSION_ORDER){
+    const row=$(`expr-${name}`);if(!row)continue;
+    const assigned=gestureMap.left===name;
+    row.classList.toggle('assigned',used.has(name));
+    const button=row.querySelector('.use-expr');
+    if(button){button.textContent=assigned?'선택에 사용 중':'선택에 쓰기';button.disabled=assigned;}
   }
 }
 function showExpressions(levels){
@@ -60,10 +84,15 @@ function showExpressions(levels){
     row.querySelector('b').style.width=`${Math.min(100,Math.round(value*100))}%`;
     row.querySelector('em').textContent=value.toFixed(2);
     // 파란 막대는 지금 설정으로 클릭이 될 만큼 올라왔다는 뜻입니다.
-    row.classList.toggle('on',value>=expressionThreshold());
+    row.classList.toggle('on',value>=expressionThreshold(name));
   }
 }
-function expressionThreshold(){return 0.3*(1-0.8*Number($('gestureSense').value)/100);}
+// 엔진이 알려 준 표정별 기준. 받기 전에는 보수적인 값을 씁니다.
+let expressionThresholds={};
+function expressionThreshold(name){
+  if(expressionThresholds[name]!==undefined)return expressionThresholds[name];
+  return 0.3*(1-0.9*Number($('gestureSense').value)/100);
+}
 
 function send(cmd, args={}) {
   window.webkit?.messageHandlers?.seeosk?.postMessage({cmd,...args});
@@ -245,6 +274,7 @@ window.receive=m=>{
     case 'tracking':track(m);break;
     // 입벌림 클릭은 dwell과 같은 반복 잠금을 쓰지 않습니다. 입을 다물었다 다시 벌려야 다음 선택이 됩니다.
     case 'gesture_action':{
+      $('gestureHint').textContent=`${GESTURE_LABELS[m.gesture]||m.gesture} → ${ACTION_LABELS[m.action]||m.action} 실행`;
       if(m.action==='pause'){pause();break;}
       if(m.action==='recenter'){recenter();break;}
       if($('clickMode').value!=='mouth'||state.paused||!state.headReady)break;
@@ -257,13 +287,15 @@ window.receive=m=>{
     case 'drag_state':
       $('gestureHint').textContent=m.holding?'드래그를 잡고 있습니다':'드래그를 놓았습니다';break;
     case 'gestures':
+      if(m.thresholds)expressionThresholds=m.thresholds;
       for(const action of Object.keys(ACTION_LABELS)){
         gestureMap[action]=m.map[action]||'none';
         const select=$(`gesture-${action}`);if(select)select.value=gestureMap[action];
       }
-      break;
+      markAssigned();break;
     case 'blur_preview':$('blurPreview').checked=m.value;break;
     case 'gesture_sensitivity':
+      if(m.thresholds)expressionThresholds=m.thresholds;
       $('gestureSense').value=String(Math.round(m.value*100));
       $('gestureSenseValue').textContent=`${Math.round(m.value*100)}%`;break;
     case 'pointer_scope':

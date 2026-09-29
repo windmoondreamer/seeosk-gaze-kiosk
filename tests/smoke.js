@@ -108,6 +108,21 @@
       $('expr-jawopen').querySelector('b').style.width==='42%');
     check('a responding expression is marked as clickable',$('expr-jawopen').classList.contains('on'));
     check('a dead expression stays unmarked',!$('expr-smile').classList.contains('on'));
+    // 값이 올라가도 어떤 동작에도 배정하지 않으면 클릭되지 않습니다. 막대에서 바로 배정할 수 있어야 합니다.
+    check('the assigned expression is marked in the live list',$('expr-jawopen').classList.contains('assigned'));
+    check('smile starts unassigned',!$('expr-smile').classList.contains('assigned'));
+    $('expr-smile').querySelector('.use-expr').click();
+    check('assigning from the live list reaches the engine',
+      sent.some(m=>m.cmd==='gestures'&&m.map.left==='smile'));
+    check('the selector follows the live-list assignment',$('gesture-left').value==='smile');
+    check('the newly assigned expression is marked',$('expr-smile').classList.contains('assigned'));
+    check('the previous expression is released',!$('expr-jawopen').classList.contains('assigned'));
+    receive({type:'gestures',map:{left:'smile'},thresholds:{smile:0.066,jawopen:0.124}});
+    receive({type:'tracking',valid:true,x:trackEvent.x,y:trackEvent.y,reason:'측정',fps:30,
+      expressions:{smile:0.10,jawopen:0.10}});
+    check('engine thresholds decide the clickable mark per expression',
+      $('expr-smile').classList.contains('on')&&!$('expr-jawopen').classList.contains('on'));
+    $('expr-jawopen').querySelector('.use-expr').click();
     $('gestureSense').value='85';$('gestureSense').oninput();
     check('gesture sensitivity reaches the engine',
       sent.some(m=>m.cmd==='gesture_sensitivity'&&Math.abs(m.value-0.85)<1e-6));
