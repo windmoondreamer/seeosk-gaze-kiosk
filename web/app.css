@@ -21,3 +21,10 @@ aside label b{float:right;font-weight:600;color:#2f6fed}
 .gesture-map select{margin:0;width:100%}
 .gesture-map .level{grid-column:1/-1;height:6px;border-radius:3px;background:#e6e9f0;overflow:hidden}
 .gesture-map .level span{display:block;height:100%;width:0;background:#2f6fed;transition:width .08s linear}
+
+.expr-live{display:grid;gap:3px;margin:6px 0 2px}
+.expr-live div{display:grid;grid-template-columns:78px 1fr 34px;gap:6px;align-items:center;font-size:11px;color:#5c6b60}
+.expr-live i{display:block;height:7px;border-radius:4px;background:#e6e9e0;overflow:hidden;font-style:normal}
+.expr-live i b{display:block;height:100%;width:0;background:#7fae4a;transition:width .08s linear}
+.expr-live .on b{background:#2f6fed}
+.expr-live em{font-style:normal;text-align:right;color:#8d968a;font-variant-numeric:tabular-nums}

@@ -168,6 +168,24 @@ class HeadControlTests(unittest.TestCase):
         self.assertGreaterEqual(high.min_margin, .03)
         self.assertLess(high.k_on, low.k_on)
 
+    def test_hard_to_reach_expressions_were_brought_down(self):
+        # 미소와 윙크는 원래 기준이 높아 크게 지어야 넘었습니다.
+        for name, ceiling in (('smile', .10), ('winkleft', .13), ('winkright', .13)):
+            d = worker.make_detector(name)
+            threshold = .02+max(d.k_on*.01, d.min_margin)
+            self.assertLess(threshold, ceiling, name)
+
+    def test_every_expression_reports_a_live_level(self):
+        blend = {'jawOpen':.4,'eyeBlinkLeft':.8,'eyeBlinkRight':.1,
+                 'mouthSmileLeft':.3,'mouthSmileRight':.5}
+        levels = worker.expression_levels(blend)
+        self.assertEqual(set(levels), set(worker.BLEND_GESTURES))
+        self.assertAlmostEqual(levels['jawopen'], .4)
+        self.assertAlmostEqual(levels['smile'], .4)          # 양쪽 평균
+        self.assertAlmostEqual(levels['winkleft'], .7)       # 좌우 차이
+        self.assertAlmostEqual(levels['winkright'], 0.)      # 음수는 0으로
+        self.assertAlmostEqual(levels['longblink'], .1)      # 두 눈 중 작은 값
+
     def test_sensitivity_command_rebuilds_the_detectors(self):
         with patch.object(worker,'Detector'), patch.object(worker,'emit') as emit:
             e = worker.Engine()
@@ -233,7 +251,8 @@ class HeadControlTests(unittest.TestCase):
             self.assertEqual(fired()[before:], ['left'])
             before=len(fired())
             e.tracker.process.return_value=(object(), {'jawOpen':.02,'cheekPuff':.9})
-            for _ in range(30): e.frame()
+            # 불응기 0.9초, 프레임 0.04초 -> 20프레임 안에서는 한 번만 인정됩니다.
+            for _ in range(20): e.frame()
             self.assertEqual(fired()[before:], ['right'])
 
     def test_sensitivity_command_clamps_and_reports(self):

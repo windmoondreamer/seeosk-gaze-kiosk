@@ -100,6 +100,9 @@ ACTIONS = ('left', 'right', 'double', 'drag', 'pause', 'recenter')
 DEFAULT_GESTURES = {'left': 'jawopen'}
 # 표정을 얼마나 크게 지어야 하는지. 1에 가까울수록 작은 움직임에도 반응합니다.
 DEFAULT_GESTURE_SENSITIVITY = .65
+# 표정별 기준 상한. 윙크는 좌우 차이를, 미소는 양쪽 평균을 쓰므로 원래 값이 너무 높았습니다.
+HARD_MARGIN_CAP = {'smile': .16, 'winkleft': .22, 'winkright': .22,
+                   'longblink': .28, 'pucker': .20, 'cheekpuff': .16, 'browup': .20}
 
 
 def clamp_sensitivity(value, fallback=DEFAULT_GESTURE_SENSITIVITY):
@@ -112,6 +115,21 @@ def clamp_sensitivity(value, fallback=DEFAULT_GESTURE_SENSITIVITY):
     return max(0., min(1., value))
 
 
+def expression_levels(blend):
+    """표정 9종의 현재 신호값. 어떤 표정이 실제로 잡히는지 눈으로 보기 위한 값입니다."""
+    levels = {}
+    for name, (keys, _margin) in BLEND_GESTURES.items():
+        if name in ('winkleft', 'winkright'):
+            other = 'eyeBlinkRight' if name == 'winkleft' else 'eyeBlinkLeft'
+            value = max(0., blend.get(keys[0], 0.)-blend.get(other, 0.))
+        elif name == 'longblink':
+            value = min(blend.get(k, 0.) for k in keys)
+        else:
+            value = sum(blend.get(k, 0.) for k in keys)/len(keys)
+        levels[name] = round(float(value), 3)
+    return levels
+
+
 def make_detector(name, sensitivity=DEFAULT_GESTURE_SENSITIVITY):
     """표정 이름으로 검출기를 만듭니다. 쓰지 않는 동작은 None.
 
@@ -119,12 +137,14 @@ def make_detector(name, sensitivity=DEFAULT_GESTURE_SENSITIVITY):
     벌려야 넘는 값이라, 조금만 벌려도 눌리게 하려면 이 여유를 줄여야 합니다.
     """
     sensitivity = clamp_sensitivity(sensitivity)
-    margin_scale = 1-.8*sensitivity      # 0.65에서 0.30 -> 0.144
-    noise_scale = 1-.6*sensitivity       # 잡음 기준(k_on*sd)도 함께 낮춥니다
+    margin_scale = 1-.9*sensitivity      # 0.65에서 0.30 -> 0.124
+    noise_scale = 1-.7*sensitivity       # 잡음 기준(k_on*sd)도 함께 낮춥니다
     if name in BLEND_GESTURES:
-        base = BLEND_GESTURES[name][1]
+        # 미소·윙크는 원래 기준이 높아 조금 지어서는 넘지 못했습니다. 표정마다 상한을 둡니다.
+        base = min(BLEND_GESTURES[name][1], HARD_MARGIN_CAP.get(name, .30))
         return ThresholdDetector(name, k_on=6.*noise_scale,
-                                 min_margin=max(.03, base*margin_scale))
+                                 min_margin=max(.03, base*margin_scale),
+                                 hold=.10)
     if name == 'nod':
         return NodDetector(amp=max(.02, .055*noise_scale))
     return None
@@ -297,6 +317,7 @@ class Engine:
                 emit('gesture_action', action=action, gesture=self.gestures[action],
                      x=data.get('x'), y=data.get('y'))
             data['gestures'] = levels
+            data['expressions'] = expression_levels(blend)
         else:
             for detector in self.detectors.values():
                 # 얼굴이 없는 동안 조준 상태를 지웁니다.

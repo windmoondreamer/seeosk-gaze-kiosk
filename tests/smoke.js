@@ -97,6 +97,17 @@
     check('every action has its own expression selector',
       Object.keys(ACTION_LABELS).every(a=>!!$(`gesture-${a}`)));
     check('gesture sensitivity starts at the easier default',$('gestureSense').value==='65');
+    // 어떤 표정이 이 카메라에서 실제로 잡히는지 눈으로 확인할 수 있어야 합니다.
+    check('every expression has a live row',
+      ['jawopen','smile','winkleft','winkright','longblink','browup','pucker','cheekpuff']
+        .every(n=>!!$(`expr-${n}`)));
+    receive({type:'tracking',valid:true,x:trackEvent.x,y:trackEvent.y,reason:'측정',fps:30,
+      expressions:{jawopen:0.42,smile:0.01,winkleft:0.00}});
+    check('a responding expression shows its value',
+      $('expr-jawopen').querySelector('em').textContent==='0.42'&&
+      $('expr-jawopen').querySelector('b').style.width==='42%');
+    check('a responding expression is marked as clickable',$('expr-jawopen').classList.contains('on'));
+    check('a dead expression stays unmarked',!$('expr-smile').classList.contains('on'));
     $('gestureSense').value='85';$('gestureSense').oninput();
     check('gesture sensitivity reaches the engine',
       sent.some(m=>m.cmd==='gesture_sensitivity'&&Math.abs(m.value-0.85)<1e-6));

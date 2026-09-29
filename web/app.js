@@ -42,6 +42,29 @@ function buildGestureMap(){
 }
 function sendGestures(){send('gestures',{map:{...gestureMap}});}
 
+// 어떤 표정이 이 카메라·각도에서 실제로 잡히는지 눈으로 보여 줍니다.
+const EXPRESSION_ORDER=['jawopen','browup','smile','pucker','cheekpuff','winkleft','winkright','longblink'];
+function buildExpressionLive(){
+  const box=$('expressionLive');box.replaceChildren();
+  for(const name of EXPRESSION_ORDER){
+    const row=document.createElement('div');row.id=`expr-${name}`;
+    const label=document.createElement('span');label.textContent=GESTURE_LABELS[name]||name;
+    const bar=document.createElement('i');bar.appendChild(document.createElement('b'));
+    const value=document.createElement('em');value.textContent='0.00';
+    row.append(label,bar,value);box.appendChild(row);
+  }
+}
+function showExpressions(levels){
+  for(const [name,value] of Object.entries(levels)){
+    const row=$(`expr-${name}`);if(!row)continue;
+    row.querySelector('b').style.width=`${Math.min(100,Math.round(value*100))}%`;
+    row.querySelector('em').textContent=value.toFixed(2);
+    // 파란 막대는 지금 설정으로 클릭이 될 만큼 올라왔다는 뜻입니다.
+    row.classList.toggle('on',value>=expressionThreshold());
+  }
+}
+function expressionThreshold(){return 0.3*(1-0.8*Number($('gestureSense').value)/100);}
+
 function send(cmd, args={}) {
   window.webkit?.messageHandlers?.seeosk?.postMessage({cmd,...args});
 }
@@ -142,6 +165,7 @@ function track(m){
   if(m.preview){$('preview').src=`data:image/jpeg;base64,${m.preview}`;$('preview').hidden=false;$('previewPlaceholder').hidden=true;}
   $('fps').textContent=`${m.fps||'—'} FPS`;$('faceBadge').textContent=m.valid?'얼굴 감지됨':'위치 확인 필요';
   $('trackingHint').textContent=m.reason;state.headValid=m.valid;
+  if(m.expressions)showExpressions(m.expressions);
   if(m.gestures){
     for(const [action,level] of Object.entries(m.gestures)){
       const bar=$(`level-${action}`)?.firstElementChild;
@@ -330,6 +354,7 @@ controls();
 $('gestureMap').hidden=$('clickMode').value!=='mouth';
 $('hitReach').oninput();
 buildGestureMap();
+buildExpressionLive();
 send('ui_ready');
 
 $('switchMode').onclick=()=>{if(!switchBoard)openSwitchBoard();};
